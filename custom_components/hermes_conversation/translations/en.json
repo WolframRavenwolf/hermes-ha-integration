@@ -33,7 +33,14 @@
           "verify_ssl": "Verify SSL certificate",
           "prompt": "System Prompt",
           "include_exposed_entities": "Include exposed entities in prompt",
-          "context_max_chars": "Max context characters"
+          "context_max_chars": "Max context characters",
+          "enable_continued_conversation": "Keep Home Assistant listening for follow-ups",
+          "enable_session_reuse": "Reuse Hermes server sessions across short voice turns",
+          "session_timeout_seconds": "Voice session reuse timeout (seconds)",
+          "expose_device_context": "Include device/satellite context in prompt",
+          "always_speak_fallback": "Always speak replies through fallback TTS",
+          "fallback_media_player": "Fallback media player entity_id",
+          "fallback_tts_engine": "Fallback TTS entity_id"
         }
       }
     }

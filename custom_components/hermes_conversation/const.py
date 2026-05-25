@@ -17,6 +17,19 @@ CONF_VERIFY_SSL = "verify_ssl"
 CONF_PROMPT = "prompt"
 CONF_INCLUDE_EXPOSED_ENTITIES = "include_exposed_entities"
 CONF_CONTEXT_MAX_CHARS = "context_max_chars"
+CONF_ENABLE_CONTINUED_CONVERSATION = "enable_continued_conversation"
+CONF_ENABLE_SESSION_REUSE = "enable_session_reuse"
+CONF_SESSION_TIMEOUT_SECONDS = "session_timeout_seconds"
+CONF_EXPOSE_DEVICE_CONTEXT = "expose_device_context"
+CONF_ALWAYS_SPEAK_FALLBACK = "always_speak_fallback"
+CONF_FALLBACK_MEDIA_PLAYER = "fallback_media_player"
+CONF_FALLBACK_TTS_ENGINE = "fallback_tts_engine"
+
+# Legacy config keys still found in existing local installs.
+LEGACY_CONF_API_BASE_URL = "api_base_url"
+LEGACY_CONF_MODEL = "model"
+LEGACY_CONF_TIMEOUT = "timeout"
+LEGACY_CONF_INSTRUCTIONS = "instructions"
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -25,9 +38,17 @@ DEFAULT_HOST = "homeassistant.local"
 DEFAULT_PORT = 8443
 DEFAULT_CONTEXT_MAX_CHARS = 12000
 DEFAULT_INCLUDE_EXPOSED_ENTITIES = False
+DEFAULT_MODEL = "hermes-agent"
 DEFAULT_TIMEOUT = 120
 DEFAULT_STREAM_TIMEOUT = 300
 DEFAULT_MAX_HISTORY_MESSAGES = 100
+DEFAULT_ENABLE_CONTINUED_CONVERSATION = False
+DEFAULT_ENABLE_SESSION_REUSE = True
+DEFAULT_SESSION_TIMEOUT_SECONDS = 900
+DEFAULT_EXPOSE_DEVICE_CONTEXT = True
+DEFAULT_ALWAYS_SPEAK_FALLBACK = False
+DEFAULT_FALLBACK_MEDIA_PLAYER = ""
+DEFAULT_FALLBACK_TTS_ENGINE = ""
 
 DEFAULT_PROMPT = (
     "You are in a voice chat with {{ user_name }} via the Home Assistant app.\n"

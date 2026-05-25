@@ -18,20 +18,35 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig
 
 from .api import HermesApiClient, HermesAuthError, HermesConnectionError
+from .compat import entry_value, resolve_connection_config
 from .const import (
+    CONF_ALWAYS_SPEAK_FALLBACK,
     CONF_API_KEY,
     CONF_CONTEXT_MAX_CHARS,
+    CONF_ENABLE_CONTINUED_CONVERSATION,
+    CONF_ENABLE_SESSION_REUSE,
+    CONF_EXPOSE_DEVICE_CONTEXT,
+    CONF_FALLBACK_MEDIA_PLAYER,
+    CONF_FALLBACK_TTS_ENGINE,
     CONF_HOST,
-    CONF_USE_SSL,
-    CONF_VERIFY_SSL,
     CONF_INCLUDE_EXPOSED_ENTITIES,
     CONF_PORT,
     CONF_PROMPT,
+    CONF_SESSION_TIMEOUT_SECONDS,
+    CONF_USE_SSL,
+    CONF_VERIFY_SSL,
+    DEFAULT_ALWAYS_SPEAK_FALLBACK,
     DEFAULT_CONTEXT_MAX_CHARS,
-    DEFAULT_INCLUDE_EXPOSED_ENTITIES,
+    DEFAULT_ENABLE_CONTINUED_CONVERSATION,
+    DEFAULT_ENABLE_SESSION_REUSE,
+    DEFAULT_EXPOSE_DEVICE_CONTEXT,
+    DEFAULT_FALLBACK_MEDIA_PLAYER,
+    DEFAULT_FALLBACK_TTS_ENGINE,
     DEFAULT_PORT,
     DEFAULT_PROMPT,
+    DEFAULT_SESSION_TIMEOUT_SECONDS,
     DOMAIN,
+    LEGACY_CONF_INSTRUCTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,7 +66,8 @@ class HermesConversationConfigFlow(ConfigFlow, domain=DOMAIN):
     def _abort_if_host_port_configured(self, host: str, port: int) -> None:
         """Abort if an entry with the same host:port already exists."""
         for entry in self._async_current_entries():
-            if entry.data.get(CONF_HOST) == host and entry.data.get(CONF_PORT) == port:
+            connection = resolve_connection_config(entry)
+            if connection.host == host and connection.port == port:
                 raise AbortFlow("already_configured")
 
     async def async_step_user(
@@ -121,7 +137,6 @@ class HermesConversationOptionsFlow(OptionsFlow):
     ) -> dict[str, Any]:
         """Manage the options."""
         if user_input is not None:
-            # Split: connection settings go into data, the rest into options
             new_data = {}
             new_options = {}
             for key, value in user_input.items():
@@ -130,7 +145,6 @@ class HermesConversationOptionsFlow(OptionsFlow):
                 else:
                     new_options[key] = value
 
-            # Update config entry data if connection settings changed
             if new_data:
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, data={**self.config_entry.data, **new_data}
@@ -138,8 +152,7 @@ class HermesConversationOptionsFlow(OptionsFlow):
 
             return self.async_create_entry(title="", data=new_options)
 
-        data = self.config_entry.data
-        options = self.config_entry.options
+        connection = resolve_connection_config(self.config_entry)
 
         return self.async_show_form(
             step_id="init",
@@ -147,43 +160,107 @@ class HermesConversationOptionsFlow(OptionsFlow):
                 {
                     vol.Required(
                         CONF_HOST,
-                        default=data.get(CONF_HOST, "homeassistant.local"),
+                        default=connection.host,
                     ): str,
                     vol.Required(
                         CONF_PORT,
-                        default=data.get(CONF_PORT, DEFAULT_PORT),
+                        default=connection.port,
                     ): int,
                     vol.Optional(
                         CONF_API_KEY,
-                        default=data.get(CONF_API_KEY, ""),
+                        default=connection.api_key or "",
                     ): TextSelector(
                         TextSelectorConfig(type="password")
                     ),
                     vol.Optional(
                         CONF_USE_SSL,
-                        default=data.get(CONF_USE_SSL, True),
+                        default=connection.use_ssl,
                     ): bool,
                     vol.Optional(
                         CONF_VERIFY_SSL,
-                        default=data.get(CONF_VERIFY_SSL, False),
+                        default=connection.verify_ssl,
                     ): bool,
                     vol.Optional(
                         CONF_PROMPT,
-                        default=options.get(CONF_PROMPT, DEFAULT_PROMPT),
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_PROMPT,
+                            DEFAULT_PROMPT,
+                            legacy_keys=(LEGACY_CONF_INSTRUCTIONS,),
+                        ),
                     ): TextSelector(TextSelectorConfig(multiline=True)),
                     vol.Optional(
                         CONF_INCLUDE_EXPOSED_ENTITIES,
-                        default=options.get(
+                        default=entry_value(
+                            self.config_entry,
                             CONF_INCLUDE_EXPOSED_ENTITIES,
-                            DEFAULT_INCLUDE_EXPOSED_ENTITIES,
+                            False,
                         ),
                     ): bool,
                     vol.Optional(
                         CONF_CONTEXT_MAX_CHARS,
-                        default=options.get(
-                            CONF_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_CONTEXT_MAX_CHARS,
+                            DEFAULT_CONTEXT_MAX_CHARS,
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1000, max=200000)),
+                    vol.Optional(
+                        CONF_ENABLE_CONTINUED_CONVERSATION,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_ENABLE_CONTINUED_CONVERSATION,
+                            DEFAULT_ENABLE_CONTINUED_CONVERSATION,
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_ENABLE_SESSION_REUSE,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_ENABLE_SESSION_REUSE,
+                            DEFAULT_ENABLE_SESSION_REUSE,
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_SESSION_TIMEOUT_SECONDS,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_SESSION_TIMEOUT_SECONDS,
+                            DEFAULT_SESSION_TIMEOUT_SECONDS,
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=86400)),
+                    vol.Optional(
+                        CONF_EXPOSE_DEVICE_CONTEXT,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_EXPOSE_DEVICE_CONTEXT,
+                            DEFAULT_EXPOSE_DEVICE_CONTEXT,
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_ALWAYS_SPEAK_FALLBACK,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_ALWAYS_SPEAK_FALLBACK,
+                            DEFAULT_ALWAYS_SPEAK_FALLBACK,
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_FALLBACK_MEDIA_PLAYER,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_FALLBACK_MEDIA_PLAYER,
+                            DEFAULT_FALLBACK_MEDIA_PLAYER,
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_FALLBACK_TTS_ENGINE,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_FALLBACK_TTS_ENGINE,
+                            DEFAULT_FALLBACK_TTS_ENGINE,
+                        ),
+                    ): str,
                 }
             ),
         )

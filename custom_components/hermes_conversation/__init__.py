@@ -13,7 +13,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import HermesApiClient
-from .const import CONF_API_KEY, CONF_HOST, CONF_PORT, CONF_USE_SSL, CONF_VERIFY_SSL, DOMAIN
+from .compat import entry_value, resolve_connection_config
+from .const import DEFAULT_TIMEOUT, DOMAIN, LEGACY_CONF_MODEL, LEGACY_CONF_TIMEOUT
 from .conversation import HermesConversationAgent
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,21 +24,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hermes Conversation from a config entry."""
     session = async_get_clientsession(hass)
 
+    connection = resolve_connection_config(entry)
     client = HermesApiClient(
         session=session,
-        host=entry.data[CONF_HOST],
-        port=entry.data[CONF_PORT],
-        api_key=entry.data.get(CONF_API_KEY) or None,
-        use_ssl=entry.data.get(CONF_USE_SSL, True),
-        verify_ssl=entry.data.get(CONF_VERIFY_SSL, False),
+        host=connection.host,
+        port=connection.port,
+        api_key=connection.api_key,
+        use_ssl=connection.use_ssl,
+        verify_ssl=connection.verify_ssl,
+        model=entry_value(entry, LEGACY_CONF_MODEL, None),
+        request_timeout=entry_value(entry, LEGACY_CONF_TIMEOUT, DEFAULT_TIMEOUT),
     )
 
-    agent = HermesConversationAgent(hass, entry, client)
-
     hass.data.setdefault(DOMAIN, {})
+    session_map: dict[str, dict[str, object]] = {}
+    agent = HermesConversationAgent(hass, entry, client, session_map=session_map)
+
     hass.data[DOMAIN][entry.entry_id] = {
         "client": client,
         "agent": agent,
+        "sessions": session_map,
     }
 
     async_set_agent(hass, entry, agent)
