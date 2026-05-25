@@ -26,6 +26,7 @@ from .api import HermesApiClient, HermesApiError
 from .compat import entry_value
 from .const import (
     CONF_ALWAYS_SPEAK_FALLBACK,
+    CONF_API_KEY,
     CONF_CONTEXT_MAX_CHARS,
     CONF_ENABLE_CONTINUED_CONVERSATION,
     CONF_ENABLE_SESSION_REUSE,
@@ -112,9 +113,9 @@ class HermesConversationAgent(AbstractConversationAgent):
                 intent.IntentResponseErrorCode.UNKNOWN,
                 "An internal error occurred. Check the logs.",
             )
-            return ConversationResult(
-                response=intent_response,
-                conversation_id=user_input.conversation_id or "default",
+            return self._build_conversation_result(
+                intent_response,
+                user_input.conversation_id or "default",
                 continue_conversation=False,
             )
 
@@ -169,9 +170,9 @@ class HermesConversationAgent(AbstractConversationAgent):
                 intent.IntentResponseErrorCode.UNKNOWN,
                 f"Error communicating with Hermes Agent: {err}",
             )
-            return ConversationResult(
-                response=intent_response,
-                conversation_id=conv_id,
+            return self._build_conversation_result(
+                intent_response,
+                conv_id,
                 continue_conversation=False,
             )
 
@@ -196,9 +197,9 @@ class HermesConversationAgent(AbstractConversationAgent):
         intent_response.async_set_speech(spoken_text)
         await self._async_speak_fallback(spoken_text, user_input)
 
-        return ConversationResult(
-            response=intent_response,
-            conversation_id=conv_id,
+        return self._build_conversation_result(
+            intent_response,
+            conv_id,
             continue_conversation=continue_conversation,
         )
 
@@ -309,13 +310,30 @@ class HermesConversationAgent(AbstractConversationAgent):
         )
 
     def _session_reuse_enabled(self) -> bool:
-        return bool(
+        if not bool(
             entry_value(
                 self.entry,
                 CONF_ENABLE_SESSION_REUSE,
                 DEFAULT_ENABLE_SESSION_REUSE,
             )
+        ):
+            return False
+
+        # Hermes Agent deliberately rejects X-Hermes-Session-Id continuation
+        # unless the API server is protected by API-key authentication.  If the
+        # user configured this integration without an API key, do not send the
+        # session header; otherwise the second voice turn would fail with 403.
+        api_key = entry_value(
+            self.entry,
+            CONF_API_KEY,
+            "",
+            prefer_options=False,
         )
+        if not api_key:
+            _LOGGER.debug("Hermes session reuse disabled because no API key is configured")
+            return False
+
+        return True
 
     def _session_timeout_seconds(self) -> int:
         try:
@@ -413,6 +431,26 @@ class HermesConversationAgent(AbstractConversationAgent):
             return [f"Assist satellite: {satellite_id}"]
         friendly_name = state.attributes.get("friendly_name", satellite_id)
         return [f"Assist satellite: {friendly_name} ({satellite_id})"]
+
+    def _build_conversation_result(
+        self,
+        intent_response: intent.IntentResponse,
+        conversation_id: str,
+        *,
+        continue_conversation: bool = False,
+    ) -> ConversationResult:
+        """Build a conversation result, preserving compatibility with older HA."""
+        try:
+            return ConversationResult(
+                response=intent_response,
+                conversation_id=conversation_id,
+                continue_conversation=continue_conversation,
+            )
+        except TypeError:
+            return ConversationResult(
+                response=intent_response,
+                conversation_id=conversation_id,
+            )
 
     async def _async_speak_fallback(
         self, text: str, user_input: ConversationInput
