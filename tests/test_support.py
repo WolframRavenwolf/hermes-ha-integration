@@ -193,6 +193,9 @@ def install_stubs():
     aiohttp_client.async_get_clientsession = lambda hass: hass._session
 
     selector = types.ModuleType("homeassistant.helpers.selector")
+    selector.SelectOptionDict = dict
+    selector.SelectSelector = lambda config=None: {"select_selector": config}
+    selector.SelectSelectorConfig = lambda **kwargs: kwargs
     selector.TextSelector = lambda config=None: {"selector": config}
     selector.TextSelectorConfig = lambda **kwargs: kwargs
 

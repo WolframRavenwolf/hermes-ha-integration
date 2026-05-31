@@ -9,10 +9,14 @@ from custom_components.hermes_conversation import conversation as conversation_m
 from custom_components.hermes_conversation.conversation import HermesConversationAgent
 from custom_components.hermes_conversation.const import (
     CONF_API_KEY,
+    CONF_CONTINUED_CONVERSATION_MODE,
     CONF_ENABLE_CONTINUED_CONVERSATION,
     CONF_ENABLE_SESSION_REUSE,
     CONF_PROMPT,
     CONF_SESSION_TIMEOUT_SECONDS,
+    FOLLOW_UP_MODE_ALWAYS,
+    FOLLOW_UP_MODE_AUTO,
+    FOLLOW_UP_MODE_OFF,
     LEGACY_CONF_INSTRUCTIONS,
 )
 
@@ -22,6 +26,7 @@ class FakeClient:
         self.calls = []
         self.last_session_id = None
         self.next_session_id = "sess-1"
+        self.next_text = "stored"
 
     async def async_stream_message(self, messages, session_id=None):
         self.calls.append({"method": "stream", "messages": messages, "session_id": session_id})
@@ -33,9 +38,9 @@ class FakeClient:
         self.calls.append({"method": "send", "messages": messages, "session_id": session_id})
         if session_id is None:
             self.last_session_id = self.next_session_id
-            return SimpleNamespace(text="stored", session_id=self.next_session_id)
+            return SimpleNamespace(text=self.next_text, session_id=self.next_session_id)
         self.last_session_id = session_id
-        return SimpleNamespace(text="reused", session_id=session_id)
+        return SimpleNamespace(text=self.next_text, session_id=session_id)
 
 
 class ConversationTests(unittest.IsolatedAsyncioTestCase):
@@ -162,6 +167,151 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.conversation_id, "conv-legacy")
         self.assertFalse(hasattr(result, "continue_conversation"))
+
+    async def test_follow_up_mode_off_is_default_even_for_questions(self):
+        entry = FakeConfigEntry(
+            options={
+                CONF_ENABLE_SESSION_REUSE: False,
+                CONF_PROMPT: "",
+            }
+        )
+        client = FakeClient()
+        client.next_text = "Would you like anything else?"
+        agent = HermesConversationAgent(FakeHass(), entry, client, session_map={})
+
+        result = await agent.async_process(
+            FakeConversationInput("hello", conversation_id="conv-off")
+        )
+
+        self.assertFalse(result.continue_conversation)
+        send_calls = [call for call in client.calls if call["method"] == "send"]
+        messages = send_calls[0]["messages"]
+        self.assertEqual(messages[-1], {"role": "user", "content": "hello"})
+        self.assertNotIn(
+            "voice auto follow-up is active",
+            "\n".join(
+                msg["content"] for msg in messages if msg["role"] == "system"
+            ),
+        )
+
+    async def test_follow_up_mode_always_keeps_listening_without_prompt_guidance(self):
+        entry = FakeConfigEntry(
+            options={
+                CONF_CONTINUED_CONVERSATION_MODE: FOLLOW_UP_MODE_ALWAYS,
+                CONF_ENABLE_SESSION_REUSE: False,
+                CONF_PROMPT: "",
+            }
+        )
+        client = FakeClient()
+        client.next_text = "Done."
+        agent = HermesConversationAgent(FakeHass(), entry, client, session_map={})
+
+        result = await agent.async_process(
+            FakeConversationInput("hello", conversation_id="conv-always")
+        )
+
+        self.assertTrue(result.continue_conversation)
+        send_calls = [call for call in client.calls if call["method"] == "send"]
+        messages = send_calls[0]["messages"]
+        self.assertEqual(messages[-1], {"role": "user", "content": "hello"})
+        self.assertNotIn(
+            "voice auto follow-up is active",
+            "\n".join(
+                msg["content"] for msg in messages if msg["role"] == "system"
+            ),
+        )
+
+    async def test_follow_up_mode_auto_keeps_listening_for_questions_only(self):
+        entry = FakeConfigEntry(
+            options={
+                CONF_CONTINUED_CONVERSATION_MODE: FOLLOW_UP_MODE_AUTO,
+                CONF_ENABLE_SESSION_REUSE: False,
+                CONF_PROMPT: "",
+            }
+        )
+        client = FakeClient()
+        agent = HermesConversationAgent(FakeHass(), entry, client, session_map={})
+
+        client.next_text = "Would you like anything else?"
+        question_result = await agent.async_process(
+            FakeConversationInput("hello", conversation_id="conv-auto-1")
+        )
+        client.next_text = "Done."
+        statement_result = await agent.async_process(
+            FakeConversationInput("hello", conversation_id="conv-auto-2")
+        )
+
+        self.assertTrue(question_result.continue_conversation)
+        self.assertFalse(statement_result.continue_conversation)
+        send_calls = [call for call in client.calls if call["method"] == "send"]
+        system_message = send_calls[0]["messages"][0]
+        self.assertEqual(system_message["role"], "system")
+        self.assertIn("voice auto follow-up is active", system_message["content"])
+
+    async def test_follow_up_mode_auto_allows_trailing_quote_after_question(self):
+        entry = FakeConfigEntry(
+            options={
+                CONF_CONTINUED_CONVERSATION_MODE: FOLLOW_UP_MODE_AUTO,
+                CONF_ENABLE_SESSION_REUSE: False,
+                CONF_PROMPT: "",
+            }
+        )
+        client = FakeClient()
+        client.next_text = '"Do you want the hallway lights too?"'
+        agent = HermesConversationAgent(FakeHass(), entry, client, session_map={})
+
+        result = await agent.async_process(
+            FakeConversationInput("hello", conversation_id="conv-auto-quote")
+        )
+
+        self.assertTrue(result.continue_conversation)
+
+    async def test_follow_up_mode_auto_ignores_embedded_questions(self):
+        entry = FakeConfigEntry(
+            options={
+                CONF_CONTINUED_CONVERSATION_MODE: FOLLOW_UP_MODE_AUTO,
+                CONF_ENABLE_SESSION_REUSE: False,
+                CONF_PROMPT: "",
+            }
+        )
+        client = FakeClient()
+        client.next_text = 'The phrase means "How are you?".'
+        agent = HermesConversationAgent(FakeHass(), entry, client, session_map={})
+
+        result = await agent.async_process(
+            FakeConversationInput("hello", conversation_id="conv-auto-embedded")
+        )
+
+        self.assertFalse(result.continue_conversation)
+
+    async def test_legacy_continued_conversation_bool_maps_to_always(self):
+        entry = FakeConfigEntry(
+            options={
+                CONF_ENABLE_CONTINUED_CONVERSATION: True,
+                CONF_ENABLE_SESSION_REUSE: False,
+                CONF_PROMPT: "",
+            }
+        )
+        client = FakeClient()
+        client.next_text = "Done."
+        agent = HermesConversationAgent(FakeHass(), entry, client, session_map={})
+
+        result = await agent.async_process(
+            FakeConversationInput("hello", conversation_id="conv-legacy-bool")
+        )
+
+        self.assertTrue(result.continue_conversation)
+
+    def test_invalid_follow_up_mode_falls_back_to_off(self):
+        entry = FakeConfigEntry(
+            options={
+                CONF_CONTINUED_CONVERSATION_MODE: "bogus",
+                CONF_ENABLE_CONTINUED_CONVERSATION: False,
+            }
+        )
+        agent = HermesConversationAgent(FakeHass(), entry, FakeClient(), session_map={})
+
+        self.assertEqual(agent._continued_conversation_mode(), FOLLOW_UP_MODE_OFF)
 
     def test_legacy_instructions_feed_system_prompt(self):
         entry = FakeConfigEntry(data={LEGACY_CONF_INSTRUCTIONS: "Legacy system prompt"}, options={})
