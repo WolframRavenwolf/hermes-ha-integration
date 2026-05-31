@@ -15,15 +15,25 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import TextSelector, TextSelectorConfig
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    TextSelector,
+    TextSelectorConfig,
+)
 
 from .api import HermesApiClient, HermesAuthError, HermesConnectionError
-from .compat import entry_value, resolve_connection_config
+from .compat import (
+    entry_value,
+    resolve_connection_config,
+    resolve_continued_conversation_mode,
+)
 from .const import (
     CONF_ALWAYS_SPEAK_FALLBACK,
     CONF_API_KEY,
+    CONF_CONTINUED_CONVERSATION_MODE,
     CONF_CONTEXT_MAX_CHARS,
-    CONF_ENABLE_CONTINUED_CONVERSATION,
     CONF_ENABLE_SESSION_REUSE,
     CONF_EXPOSE_DEVICE_CONTEXT,
     CONF_FALLBACK_MEDIA_PLAYER,
@@ -37,7 +47,6 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_ALWAYS_SPEAK_FALLBACK,
     DEFAULT_CONTEXT_MAX_CHARS,
-    DEFAULT_ENABLE_CONTINUED_CONVERSATION,
     DEFAULT_ENABLE_SESSION_REUSE,
     DEFAULT_EXPOSE_DEVICE_CONTEXT,
     DEFAULT_FALLBACK_MEDIA_PLAYER,
@@ -46,10 +55,19 @@ from .const import (
     DEFAULT_PROMPT,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
     DOMAIN,
+    FOLLOW_UP_MODE_ALWAYS,
+    FOLLOW_UP_MODE_AUTO,
+    FOLLOW_UP_MODE_OFF,
     LEGACY_CONF_INSTRUCTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_FOLLOW_UP_MODE_OPTIONS = [
+    SelectOptionDict(value=FOLLOW_UP_MODE_OFF, label="Off"),
+    SelectOptionDict(value=FOLLOW_UP_MODE_ALWAYS, label="Always"),
+    SelectOptionDict(value=FOLLOW_UP_MODE_AUTO, label="Auto when Hermes asks a question"),
+]
 
 
 class HermesConversationConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -206,13 +224,11 @@ class HermesConversationOptionsFlow(OptionsFlow):
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1000, max=200000)),
                     vol.Optional(
-                        CONF_ENABLE_CONTINUED_CONVERSATION,
-                        default=entry_value(
-                            self.config_entry,
-                            CONF_ENABLE_CONTINUED_CONVERSATION,
-                            DEFAULT_ENABLE_CONTINUED_CONVERSATION,
-                        ),
-                    ): bool,
+                        CONF_CONTINUED_CONVERSATION_MODE,
+                        default=resolve_continued_conversation_mode(self.config_entry),
+                    ): SelectSelector(
+                        SelectSelectorConfig(options=_FOLLOW_UP_MODE_OPTIONS)
+                    ),
                     vol.Optional(
                         CONF_ENABLE_SESSION_REUSE,
                         default=entry_value(

@@ -23,12 +23,11 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import intent, template
 
 from .api import HermesApiClient, HermesApiError
-from .compat import entry_value
+from .compat import entry_value, resolve_continued_conversation_mode
 from .const import (
     CONF_ALWAYS_SPEAK_FALLBACK,
     CONF_API_KEY,
     CONF_CONTEXT_MAX_CHARS,
-    CONF_ENABLE_CONTINUED_CONVERSATION,
     CONF_ENABLE_SESSION_REUSE,
     CONF_EXPOSE_DEVICE_CONTEXT,
     CONF_FALLBACK_MEDIA_PLAYER,
@@ -38,7 +37,6 @@ from .const import (
     CONF_SESSION_TIMEOUT_SECONDS,
     DEFAULT_ALWAYS_SPEAK_FALLBACK,
     DEFAULT_CONTEXT_MAX_CHARS,
-    DEFAULT_ENABLE_CONTINUED_CONVERSATION,
     DEFAULT_ENABLE_SESSION_REUSE,
     DEFAULT_EXPOSE_DEVICE_CONTEXT,
     DEFAULT_FALLBACK_MEDIA_PLAYER,
@@ -47,10 +45,19 @@ from .const import (
     DEFAULT_MAX_HISTORY_MESSAGES,
     DEFAULT_PROMPT,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
+    FOLLOW_UP_MODE_ALWAYS,
+    FOLLOW_UP_MODE_AUTO,
     LEGACY_CONF_INSTRUCTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+_QUESTION_MARKERS = ("?", "\uFF1F")
+_TRAILING_CLOSERS = "\"')]}" + "\u201d\u2019\u00bb"
+_AUTO_FOLLOW_UP_PROMPT = (
+    "When voice auto follow-up is active and you want the user to reply, "
+    "give any needed answer first and end with one short, direct question as "
+    "the final sentence. Do not add any words after the question mark."
+)
 
 
 def _sanitize_text_for_speech(text: str) -> str:
@@ -124,7 +131,7 @@ class HermesConversationAgent(AbstractConversationAgent):
     ) -> ConversationResult:
         """Inner processing — wrapped by async_process for error logging."""
         conv_id = user_input.conversation_id or str(uuid.uuid4())
-        continue_conversation = self._continued_conversation_enabled()
+        follow_up_mode = self._continued_conversation_mode()
         session_reuse = self._session_reuse_enabled()
         session_key = self._build_session_key(user_input, conv_id) if session_reuse else None
         session_id = self._get_active_session_id(session_key) if session_key else None
@@ -146,6 +153,11 @@ class HermesConversationAgent(AbstractConversationAgent):
             if context_lines:
                 origin_block = "Origin context:\n" + "\n".join(f"- {line}" for line in context_lines)
                 system_prompt = (system_prompt + "\n\n" + origin_block) if system_prompt else origin_block
+
+        system_prompt = self._append_auto_follow_up_prompt(
+            system_prompt,
+            follow_up_mode,
+        )
 
         if session_reuse:
             messages: list[dict[str, str]] = []
@@ -196,6 +208,10 @@ class HermesConversationAgent(AbstractConversationAgent):
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(spoken_text)
         await self._async_speak_fallback(spoken_text, user_input)
+        continue_conversation = self._should_continue_conversation(
+            follow_up_mode,
+            spoken_text,
+        )
 
         return self._build_conversation_result(
             intent_response,
@@ -267,6 +283,20 @@ class HermesConversationAgent(AbstractConversationAgent):
             _LOGGER.warning("System prompt template error: %s", err)
             return prompt_template
 
+    def _append_auto_follow_up_prompt(
+        self,
+        system_prompt: str,
+        follow_up_mode: str,
+    ) -> str:
+        """Append guidance that makes auto follow-up turns cleaner."""
+        if follow_up_mode != FOLLOW_UP_MODE_AUTO:
+            return system_prompt
+
+        if system_prompt:
+            return f"{system_prompt}\n\n{_AUTO_FOLLOW_UP_PROMPT}"
+
+        return _AUTO_FOLLOW_UP_PROMPT
+
     def _get_exposed_entities(self) -> list[dict[str, str]]:
         """Get a list of entities exposed to the conversation agent."""
         max_chars = entry_value(
@@ -300,14 +330,25 @@ class HermesConversationAgent(AbstractConversationAgent):
 
         return entities
 
-    def _continued_conversation_enabled(self) -> bool:
-        return bool(
-            entry_value(
-                self.entry,
-                CONF_ENABLE_CONTINUED_CONVERSATION,
-                DEFAULT_ENABLE_CONTINUED_CONVERSATION,
-            )
-        )
+    def _continued_conversation_mode(self) -> str:
+        return resolve_continued_conversation_mode(self.entry)
+
+    def _should_continue_conversation(
+        self,
+        follow_up_mode: str,
+        response_text: str,
+    ) -> bool:
+        """Return whether the voice pipeline should keep listening."""
+        if follow_up_mode == FOLLOW_UP_MODE_ALWAYS:
+            return True
+        if follow_up_mode != FOLLOW_UP_MODE_AUTO:
+            return False
+        return self._response_invites_follow_up(response_text)
+
+    def _response_invites_follow_up(self, response_text: str) -> bool:
+        """Detect when Hermes ended with a question worth keeping HA open for."""
+        stripped_text = response_text.strip().rstrip(_TRAILING_CLOSERS)
+        return stripped_text.endswith(_QUESTION_MARKERS)
 
     def _session_reuse_enabled(self) -> bool:
         if not bool(

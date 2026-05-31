@@ -10,12 +10,18 @@ from homeassistant.config_entries import ConfigEntry
 
 from .const import (
     CONF_API_KEY,
+    CONF_CONTINUED_CONVERSATION_MODE,
+    CONF_ENABLE_CONTINUED_CONVERSATION,
     CONF_HOST,
     CONF_PORT,
     CONF_USE_SSL,
     CONF_VERIFY_SSL,
+    DEFAULT_CONTINUED_CONVERSATION_MODE,
     DEFAULT_HOST,
+    DEFAULT_ENABLE_CONTINUED_CONVERSATION,
     DEFAULT_PORT,
+    FOLLOW_UP_MODE_ALWAYS,
+    FOLLOW_UP_MODES,
     LEGACY_CONF_API_BASE_URL,
 )
 
@@ -100,6 +106,23 @@ def resolve_connection_config(entry: ConfigEntry) -> HermesConnectionConfig:
         use_ssl=True if use_ssl is None else bool(use_ssl),
         verify_ssl=False if verify_ssl is None else bool(verify_ssl),
     )
+
+
+def resolve_continued_conversation_mode(entry: ConfigEntry) -> str:
+    """Resolve follow-up listening mode with legacy boolean compatibility."""
+    mode = entry_value(entry, CONF_CONTINUED_CONVERSATION_MODE)
+    if mode in FOLLOW_UP_MODES:
+        return str(mode)
+
+    legacy_enabled = entry_value(
+        entry,
+        CONF_ENABLE_CONTINUED_CONVERSATION,
+        DEFAULT_ENABLE_CONTINUED_CONVERSATION,
+    )
+    if bool(legacy_enabled):
+        return FOLLOW_UP_MODE_ALWAYS
+
+    return DEFAULT_CONTINUED_CONVERSATION_MODE
 
 
 def parse_api_base_url(value: Any) -> ParsedApiBaseUrl | None:

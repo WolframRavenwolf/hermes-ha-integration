@@ -12,6 +12,7 @@ A [Home Assistant](https://home-assistant.io/) custom integration that connects 
 - **Hermes session continuity** — reuses Hermes `X-Hermes-Session-Id` sessions across short voice turns
 - **Voice-origin awareness** — can key continuity from `device_id` / `satellite_id` and pass room context into the prompt
 - **Entity exposure** — includes your smart home device states in the system prompt
+- **Follow-up listening modes** — keep Assist closed, always listening, or listening only when Hermes asks a question
 - **Multi-turn** — supports both local HA-side history and Hermes-backed session reuse
 - **Username resolution** — passes the user's name to the agent
 - **Configurable** — connection settings and prompt options can be changed anytime via Configure
@@ -72,7 +73,7 @@ After setup, all settings can be changed via **Settings → Devices & Services �
 | System Prompt                            | (built-in)          | Jinja2 template — leave empty to use Hermes Agent's own prompt                         |
 | Include exposed entities                 | No                  | Include smart home device states in the system prompt                                  |
 | Max context characters                   | 12000               | Character limit for the entity context block                                           |
-| Keep HA listening for follow-ups         | No                  | Home Assistant continued-conversation mode                                             |
+| Follow-up listening                      | Off                 | Off, always on, or automatic only when Hermes asks a follow-up question                 |
 | Reuse Hermes server sessions             | Yes                 | Preserve short-term context across fresh wake-word turns via `X-Hermes-Session-Id`     |
 | Voice session reuse timeout (seconds)    | 900                 | Idle timeout before a remembered voice session expires                                 |
 | Include device/satellite context         | Yes                 | Append voice-origin device/area/satellite metadata to the prompt                       |
@@ -86,10 +87,13 @@ The default system prompt includes the current date/time, timezone, the user's n
 
 Recommended mode if you want to say the wake word each turn **without** losing short-term context:
 
-- **Keep HA listening for follow-ups:** Off
+- **Follow-up listening:** Off
 - **Reuse Hermes server sessions:** On
 
 This separates Home Assistant's continued-conversation UX from Hermes's backend memory continuity.
+
+Use **Follow-up listening: Auto when Hermes asks a question** if you want Assist
+to reopen only when Hermes ends with a direct question.
 
 ## How It Works
 
