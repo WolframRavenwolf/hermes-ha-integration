@@ -34,6 +34,10 @@ class HermesAuthError(HermesApiError):
     """Authentication failed."""
 
 
+class HermesStreamSetupError(HermesApiError):
+    """Streaming request was rejected before a stream was established."""
+
+
 @dataclass(slots=True)
 class HermesApiResult:
     """Result wrapper for Hermes API chat-completions calls."""
@@ -190,7 +194,7 @@ class HermesApiClient:
                     raise HermesAuthError("Invalid API key")
                 if resp.status >= 400:
                     body = await resp.text()
-                    raise HermesApiError(
+                    raise HermesStreamSetupError(
                         f"API error {resp.status}: {body[:500]}"
                     )
 
@@ -198,17 +202,27 @@ class HermesApiClient:
 
                 # Parse SSE stream
                 buffer = ""
+                event_name = "message"
                 async for chunk in resp.content.iter_any():
                     buffer += chunk.decode("utf-8", errors="replace")
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
+                        line = line.rstrip("\r")
 
                         if not line:
+                            event_name = "message"
+                            continue
+                        line = line.strip()
+                        if line.startswith(":"):
+                            continue
+                        if line.startswith("event:"):
+                            event_name = line[6:].strip() or "message"
                             continue
                         if line == "data: [DONE]":
                             return
                         if not line.startswith("data: "):
+                            continue
+                        if event_name != "message":
                             continue
 
                         try:
@@ -218,7 +232,7 @@ class HermesApiClient:
                                 .get("delta", {})
                                 .get("content")
                             )
-                            if delta:
+                            if isinstance(delta, str) and delta:
                                 yield delta
                         except (json.JSONDecodeError, IndexError):
                             continue

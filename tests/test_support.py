@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,55 @@ class FakeConversationResult:
     response: object
     conversation_id: str
     continue_conversation: bool
+
+
+@dataclass
+class FakeAssistantContent:
+    agent_id: str
+    content: str
+    role: str = "assistant"
+
+
+class FakeChatLog:
+    def __init__(self, conversation_id, user_text):
+        self.conversation_id = conversation_id
+        self.content = [SimpleNamespace(role="user", content=user_text)]
+        self.deltas = []
+
+    async def async_add_delta_content_stream(self, agent_id, stream):
+        current_content = ""
+        async for delta in stream:
+            self.deltas.append(delta)
+            if "role" in delta and current_content:
+                content = FakeAssistantContent(agent_id=agent_id, content=current_content)
+                self.content.append(content)
+                yield content
+                current_content = ""
+            if delta_content := delta.get("content"):
+                current_content += delta_content
+
+        if current_content:
+            content = FakeAssistantContent(agent_id=agent_id, content=current_content)
+            self.content.append(content)
+            yield content
+
+
+@contextmanager
+def fake_async_get_chat_session(hass, conversation_id):
+    yield SimpleNamespace(
+        conversation_id=conversation_id or "default",
+        async_on_cleanup=lambda callback: None,
+    )
+
+
+@contextmanager
+def fake_async_get_chat_log(hass, session, user_input):
+    chat_log = FakeChatLog(
+        session.conversation_id,
+        user_input.text if user_input is not None else "",
+    )
+    hass.data["last_chat_log"] = chat_log
+    yield chat_log
 
 
 class FakeTemplate:
@@ -102,6 +152,8 @@ class FakeConfigEntries:
     def __init__(self):
         self.updated = []
         self.reloaded = []
+        self.forwarded = []
+        self.unloaded = []
 
     def async_update_entry(self, entry, *, data=None):
         if data is not None:
@@ -110,6 +162,16 @@ class FakeConfigEntries:
 
     async def async_reload(self, entry_id):
         self.reloaded.append(entry_id)
+
+    async def async_forward_entry_setups(self, entry, platforms):
+        self.forwarded.append((entry.entry_id, tuple(platforms)))
+
+    async def async_unload_platforms(self, entry, platforms):
+        self.unloaded.append((entry.entry_id, tuple(platforms)))
+        return True
+
+    def async_get_entry(self, entry_id):
+        return None
 
 
 class FakeServices:
@@ -161,16 +223,46 @@ def install_stubs():
     core.HomeAssistant = FakeHass
     core.callback = lambda fn: fn
 
+    const = types.ModuleType("homeassistant.const")
+    const.MATCH_ALL = "*"
+    const.Platform = SimpleNamespace(CONVERSATION="conversation")
+
     data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
     data_entry_flow.AbortFlow = type("AbortFlow", (Exception,), {})
 
     conversation = types.ModuleType("homeassistant.components.conversation")
     conversation.AbstractConversationAgent = type("AbstractConversationAgent", (), {})
+    conversation.ChatLog = FakeChatLog
+    conversation.ConversationEntityFeature = SimpleNamespace(CONTROL=1)
     conversation.ConversationInput = FakeConversationInput
     conversation.ConversationResult = FakeConversationResult
     conversation.MATCH_ALL = "*"
+    conversation.async_get_chat_log = fake_async_get_chat_log
     conversation.async_set_agent = lambda hass, entry, agent: hass.data.setdefault("set_agents", []).append((entry.entry_id, agent))
     conversation.async_unset_agent = lambda hass, entry: hass.data.setdefault("unset_agents", []).append(entry.entry_id)
+
+    class FakeConversationEntity:
+        _attr_supports_streaming = False
+
+        @property
+        def supports_streaming(self):
+            return self._attr_supports_streaming
+
+        async def async_added_to_hass(self):
+            return None
+
+        async def async_will_remove_from_hass(self):
+            return None
+
+        async def async_process(self, user_input):
+            chat_log = FakeChatLog(
+                user_input.conversation_id or "default",
+                user_input.text,
+            )
+            self._last_chat_log = chat_log
+            return await self._async_handle_message(user_input, chat_log)
+
+    conversation.ConversationEntity = FakeConversationEntity
 
     exposed = types.ModuleType("homeassistant.components.homeassistant.exposed_entities")
     exposed.async_should_expose = lambda hass, platform, entity_id: True
@@ -192,6 +284,9 @@ def install_stubs():
     aiohttp_client = types.ModuleType("homeassistant.helpers.aiohttp_client")
     aiohttp_client.async_get_clientsession = lambda hass: hass._session
 
+    chat_session = types.ModuleType("homeassistant.helpers.chat_session")
+    chat_session.async_get_chat_session = fake_async_get_chat_session
+
     selector = types.ModuleType("homeassistant.helpers.selector")
     selector.SelectOptionDict = dict
     selector.SelectSelector = lambda config=None: {"select_selector": config}
@@ -205,6 +300,7 @@ def install_stubs():
     helpers.area_registry = area_registry
     helpers.device_registry = device_registry
     helpers.aiohttp_client = aiohttp_client
+    helpers.chat_session = chat_session
     helpers.selector = selector
 
     aiohttp = types.ModuleType("aiohttp")
@@ -222,6 +318,7 @@ def install_stubs():
 
     sys.modules["homeassistant"] = ha
     sys.modules["homeassistant.config_entries"] = config_entries
+    sys.modules["homeassistant.const"] = const
     sys.modules["homeassistant.core"] = core
     sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
     sys.modules["homeassistant.components.conversation"] = conversation
@@ -232,6 +329,7 @@ def install_stubs():
     sys.modules["homeassistant.helpers.area_registry"] = area_registry
     sys.modules["homeassistant.helpers.device_registry"] = device_registry
     sys.modules["homeassistant.helpers.aiohttp_client"] = aiohttp_client
+    sys.modules["homeassistant.helpers.chat_session"] = chat_session
     sys.modules["homeassistant.helpers.selector"] = selector
     sys.modules["aiohttp"] = aiohttp
     sys.modules["voluptuous"] = voluptuous

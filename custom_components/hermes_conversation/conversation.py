@@ -7,13 +7,18 @@ import re
 import time
 import uuid
 from collections import OrderedDict
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from homeassistant.components.conversation import (
     AbstractConversationAgent,
+    ConversationEntity,
+    ConversationEntityFeature,
     ConversationInput,
     ConversationResult,
     MATCH_ALL,
+    async_set_agent,
+    async_unset_agent,
 )
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.config_entries import ConfigEntry
@@ -22,7 +27,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import intent, template
 
-from .api import HermesApiClient, HermesApiError
+from .api import HermesApiClient, HermesApiError, HermesStreamSetupError
 from .compat import entry_value, resolve_continued_conversation_mode
 from .const import (
     CONF_ALWAYS_SPEAK_FALLBACK,
@@ -45,12 +50,22 @@ from .const import (
     DEFAULT_MAX_HISTORY_MESSAGES,
     DEFAULT_PROMPT,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
+    DOMAIN,
     FOLLOW_UP_MODE_ALWAYS,
     FOLLOW_UP_MODE_AUTO,
     LEGACY_CONF_INSTRUCTIONS,
 )
 
+try:
+    from homeassistant.components.conversation import ChatLog, async_get_chat_log
+    from homeassistant.helpers.chat_session import async_get_chat_session
+except ImportError:
+    ChatLog = Any
+    async_get_chat_log = None
+    async_get_chat_session = None
+
 _LOGGER = logging.getLogger(__name__)
+_MAX_CACHED_CONVERSATIONS = 50
 _QUESTION_MARKERS = ("?", "\uFF1F")
 _TRAILING_CLOSERS = "\"')]}" + "\u201d\u2019\u00bb"
 _AUTO_FOLLOW_UP_PROMPT = (
@@ -59,6 +74,159 @@ _AUTO_FOLLOW_UP_PROMPT = (
     "the final sentence. Do not add any words after the question mark."
 )
 
+_UNSAFE_SPEECH_TAG_PATTERN = (
+    "think|analysis|tool_call|tool_calls|function_call|function_calls|"
+    "tool_result|tool_results"
+)
+_UNSAFE_SPEECH_BLOCK_RE = re.compile(
+    rf"<\s*({_UNSAFE_SPEECH_TAG_PATTERN})\b[^>]*>.*?<\s*/\s*\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_UNSAFE_SPEECH_OPEN_RE = re.compile(
+    rf"<\s*(?:{_UNSAFE_SPEECH_TAG_PATTERN})\b[^>]*>.*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_UNSAFE_SPEECH_TAG_RE = re.compile(
+    rf"<\s*/?\s*(?:{_UNSAFE_SPEECH_TAG_PATTERN})\b[^>]*>",
+    re.IGNORECASE,
+)
+_UNSAFE_SPEECH_START_RE = re.compile(
+    rf"<\s*({_UNSAFE_SPEECH_TAG_PATTERN})\b[^>]*>",
+    re.IGNORECASE,
+)
+_MAX_UNSAFE_CLOSE_TAG_LENGTH = 80
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: Callable[[list[Any]], None],
+) -> None:
+    """Set up the Hermes conversation entity."""
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities(
+        [
+            HermesConversationAgent(
+                hass,
+                entry,
+                entry_data["client"],
+                session_map=entry_data["sessions"],
+            )
+        ]
+    )
+
+
+class _UnsafeSpeechStreamFilter:
+    """Incrementally drop hidden reasoning and tool markup from streamed speech."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._discard_until_tag: str | None = None
+
+    def feed(self, text: str) -> str:
+        """Add a stream delta and return the safe text that can be emitted now."""
+        if not text:
+            return ""
+        self._buffer += text
+        return self._drain(final=False)
+
+    def flush(self) -> str:
+        """Return any remaining safe text at end of stream."""
+        return self._drain(final=True)
+
+    def _drain(self, *, final: bool) -> str:
+        safe_parts: list[str] = []
+
+        while self._buffer:
+            if self._discard_until_tag:
+                close_re = re.compile(
+                    rf"<\s*/\s*{re.escape(self._discard_until_tag)}\s*>",
+                    re.IGNORECASE,
+                )
+                close_match = close_re.search(self._buffer)
+                if close_match is None:
+                    if final:
+                        self._buffer = ""
+                        self._discard_until_tag = None
+                    else:
+                        self._buffer = self._buffer[-_MAX_UNSAFE_CLOSE_TAG_LENGTH:]
+                    break
+
+                self._buffer = self._buffer[close_match.end() :]
+                self._discard_until_tag = None
+                continue
+
+            open_match = _UNSAFE_SPEECH_START_RE.search(self._buffer)
+            if open_match is not None:
+                safe_parts.append(self._buffer[: open_match.start()])
+                tag = open_match.group(1).lower()
+                close_re = re.compile(
+                    rf"<\s*/\s*{re.escape(tag)}\s*>",
+                    re.IGNORECASE,
+                )
+                close_match = close_re.search(self._buffer, open_match.end())
+                if close_match is None:
+                    self._buffer = self._buffer[open_match.end() :]
+                    self._discard_until_tag = tag
+                    if not final:
+                        self._buffer = self._buffer[-_MAX_UNSAFE_CLOSE_TAG_LENGTH:]
+                    else:
+                        self._buffer = ""
+                        self._discard_until_tag = None
+                    break
+
+                self._buffer = self._buffer[close_match.end() :]
+                continue
+
+            safe_parts.append(self._consume_safe_buffer(final=final))
+            break
+
+        return _sanitize_stream_text_for_speech("".join(safe_parts))
+
+    def _consume_safe_buffer(self, *, final: bool) -> str:
+        if final:
+            safe = self._buffer
+            self._buffer = ""
+            return safe
+
+        last_lt = self._buffer.rfind("<")
+        if last_lt != -1 and ">" not in self._buffer[last_lt:]:
+            safe = self._buffer[:last_lt]
+            self._buffer = self._buffer[last_lt:]
+            return safe
+
+        safe = self._buffer
+        self._buffer = ""
+        return safe
+
+
+def _remove_unsafe_speech_markup(text: str) -> str:
+    """Remove hidden reasoning and tool-call markup before it reaches TTS."""
+    cleaned = text
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = _UNSAFE_SPEECH_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNSAFE_SPEECH_OPEN_RE.sub("", cleaned)
+    return _UNSAFE_SPEECH_TAG_RE.sub("", cleaned)
+
+
+def _sanitize_stream_text_for_speech(text: str) -> str:
+    """Apply safe, local cleanup to a speech stream delta."""
+    if not text:
+        return text
+    cleaned = text.replace("\r\n", "\n")
+    cleaned = _remove_unsafe_speech_markup(cleaned)
+    cleaned = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", cleaned)
+    return (
+        cleaned.replace("```", "")
+        .replace("`", "")
+        .replace("**", "")
+        .replace("__", "")
+        .replace("~~", "")
+    )
+
 
 def _sanitize_text_for_speech(text: str) -> str:
     """Convert markdown-ish assistant output into plain speech-friendly text."""
@@ -66,6 +234,7 @@ def _sanitize_text_for_speech(text: str) -> str:
         return text
 
     cleaned = text.replace("\r\n", "\n")
+    cleaned = _remove_unsafe_speech_markup(cleaned)
     cleaned = re.sub(r"```(?:[\w+-]+)?\n?(.*?)```", r"\1", cleaned, flags=re.DOTALL)
     cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
     cleaned = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", cleaned)
@@ -81,11 +250,15 @@ def _sanitize_text_for_speech(text: str) -> str:
     cleaned = re.sub(r"\[(.*?)\]\[[^\]]*\]", r"\1", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.!?;:])", r"\1", cleaned)
     return cleaned.strip()
 
 
-class HermesConversationAgent(AbstractConversationAgent):
-    """Hermes Agent conversation agent for Home Assistant."""
+class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
+    """Hermes Agent conversation entity for Home Assistant."""
+
+    _attr_should_poll = False
+    _attr_supports_streaming = True
 
     def __init__(
         self,
@@ -99,6 +272,9 @@ class HermesConversationAgent(AbstractConversationAgent):
         self.entry = entry
         self.client = client
         self.session_map = session_map
+        self._attr_unique_id = entry.entry_id
+        self._attr_name = getattr(entry, "title", None) or "Hermes Agent"
+        self._attr_supported_features = ConversationEntityFeature.CONTROL
         # conversation_id -> list of {"role": ..., "content": ...}
         self._history: OrderedDict[str, list[dict[str, str]]] = OrderedDict()
 
@@ -107,12 +283,64 @@ class HermesConversationAgent(AbstractConversationAgent):
         """Return supported languages (all — the LLM handles it)."""
         return MATCH_ALL
 
+    @property
+    def supports_streaming(self) -> bool:
+        """Return if the entity supports streaming responses."""
+        return True
+
+    async def async_added_to_hass(self) -> None:
+        """Register a legacy agent alias for older Home Assistant callers."""
+        if super_added := getattr(super(), "async_added_to_hass", None):
+            await super_added()
+        async_set_agent(self.hass, self.entry, self)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Remove the legacy agent alias when Home Assistant unloads the entity."""
+        async_unset_agent(self.hass, self.entry)
+        if super_removed := getattr(super(), "async_will_remove_from_hass", None):
+            await super_removed()
+
+    async def _async_handle_message(
+        self,
+        user_input: ConversationInput,
+        chat_log: ChatLog,
+    ) -> ConversationResult:
+        """Handle a modern Home Assistant conversation turn."""
+        return await self._async_process_with_error_handling(user_input, chat_log)
+
     async def async_process(
         self, user_input: ConversationInput
     ) -> ConversationResult:
         """Process a conversation turn."""
+        return await self._async_process_with_error_handling(user_input)
+
+    async def _async_process_with_error_handling(
+        self,
+        user_input: ConversationInput,
+        chat_log: ChatLog | None = None,
+    ) -> ConversationResult:
+        """Process a conversation turn and convert unexpected errors."""
         try:
-            return await self._async_process_inner(user_input)
+            if (
+                chat_log is None
+                and async_get_chat_log is not None
+                and async_get_chat_session is not None
+            ):
+                with (
+                    async_get_chat_session(
+                        self.hass,
+                        user_input.conversation_id,
+                    ) as session,
+                    async_get_chat_log(
+                        self.hass,
+                        session,
+                        user_input,
+                    ) as active_chat_log,
+                ):
+                    return await self._async_process_inner(
+                        user_input, chat_log=active_chat_log
+                    )
+            return await self._async_process_inner(user_input, chat_log=chat_log)
         except Exception:
             _LOGGER.exception("Unexpected error in async_process")
             intent_response = intent.IntentResponse(language=user_input.language)
@@ -122,15 +350,21 @@ class HermesConversationAgent(AbstractConversationAgent):
             )
             return self._build_conversation_result(
                 intent_response,
-                user_input.conversation_id or "default",
+                getattr(chat_log, "conversation_id", None)
+                or user_input.conversation_id
+                or "default",
                 continue_conversation=False,
             )
 
     async def _async_process_inner(
-        self, user_input: ConversationInput
+        self, user_input: ConversationInput, chat_log: ChatLog | None = None
     ) -> ConversationResult:
         """Inner processing — wrapped by async_process for error logging."""
-        conv_id = user_input.conversation_id or str(uuid.uuid4())
+        conv_id = (
+            getattr(chat_log, "conversation_id", None)
+            or user_input.conversation_id
+            or str(uuid.uuid4())
+        )
         follow_up_mode = self._continued_conversation_mode()
         session_reuse = self._session_reuse_enabled()
         session_key = self._build_session_key(user_input, conv_id) if session_reuse else None
@@ -173,7 +407,14 @@ class HermesConversationAgent(AbstractConversationAgent):
             messages.append({"role": "user", "content": user_input.text})
 
         try:
-            response_text = await self._get_response(messages, session_id=session_id)
+            if chat_log is None:
+                response_text = await self._get_response(messages, session_id=session_id)
+            else:
+                response_text = await self._stream_chat_log_response(
+                    chat_log,
+                    messages,
+                    session_id=session_id,
+                )
             spoken_text = _sanitize_text_for_speech(response_text)
         except HermesApiError as err:
             _LOGGER.error("Hermes API error: %s", err)
@@ -202,7 +443,7 @@ class HermesConversationAgent(AbstractConversationAgent):
                 if history and history[0]["role"] == "assistant":
                     history.pop(0)
 
-            while len(self._history) > 50:
+            while len(self._history) > _MAX_CACHED_CONVERSATIONS:
                 self._history.popitem(last=False)
 
         intent_response = intent.IntentResponse(language=user_input.language)
@@ -219,20 +460,112 @@ class HermesConversationAgent(AbstractConversationAgent):
             continue_conversation=continue_conversation,
         )
 
+    async def _stream_chat_log_response(
+        self,
+        chat_log: ChatLog,
+        messages: list[dict[str, str]],
+        session_id: str | None = None,
+    ) -> str:
+        """Stream safe assistant deltas into Home Assistant's chat log."""
+        chunks: list[str] = []
+
+        async def _stream() -> AsyncIterator[dict[str, str]]:
+            started = False
+            try:
+                async for chunk in self._iter_voice_safe_response(
+                    messages, session_id=session_id
+                ):
+                    if not chunk:
+                        continue
+                    if not started:
+                        yield {"role": "assistant"}
+                        started = True
+                    chunks.append(chunk)
+                    yield {"content": chunk}
+            except HermesApiError as err:
+                if chunks:
+                    _LOGGER.warning(
+                        "Hermes stream failed after content started; keeping partial response: %s",
+                        err,
+                    )
+                    return
+                raise
+
+        try:
+            async for _content in chat_log.async_add_delta_content_stream(
+                self._agent_id(), _stream()
+            ):
+                pass
+        except HermesApiError as err:
+            if chunks:
+                _LOGGER.warning(
+                    "Hermes stream failed after content started; keeping partial response: %s",
+                    err,
+                )
+                return "".join(chunks)
+            raise
+
+        return "".join(chunks)
+
+    async def _iter_voice_safe_response(
+        self,
+        messages: list[dict[str, str]],
+        session_id: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Yield speech-safe assistant text chunks from Hermes streaming."""
+        speech_filter = _UnsafeSpeechStreamFilter()
+        stream_started = False
+
+        try:
+            async for chunk in self.client.async_stream_message(
+                messages, session_id=session_id
+            ):
+                stream_started = True
+                if safe_chunk := speech_filter.feed(chunk):
+                    yield safe_chunk
+        except HermesStreamSetupError as err:
+            if stream_started:
+                raise
+            _LOGGER.debug(
+                "Hermes streaming setup failed; falling back to non-streaming: %s",
+                err,
+            )
+            result = await self.client.async_send_message(messages, session_id=session_id)
+            if safe_text := _sanitize_text_for_speech(result.text):
+                yield safe_text
+            return
+
+        if final_chunk := speech_filter.flush():
+            yield final_chunk
+
+    def _agent_id(self) -> str:
+        """Return the best available Home Assistant agent identifier."""
+        return getattr(self, "entity_id", None) or self.entry.entry_id
+
     async def _get_response(
         self,
         messages: list[dict[str, str]],
         session_id: str | None = None,
     ) -> str:
-        """Get a response from the API.
-
-        Home Assistant voice needs clean final speech, not intermediate stream events.
-        Hermes's streaming endpoint can legitimately include tool-progress deltas for chat
-        UIs, which then get spoken out loud here. Use the non-streaming endpoint so the
-        voice pipeline only receives the final assistant text.
-        """
-        result = await self.client.async_send_message(messages, session_id=session_id)
-        return result.text
+        """Get a response from the API using voice-safe streaming."""
+        chunks: list[str] = []
+        try:
+            async for chunk in self._iter_voice_safe_response(messages, session_id):
+                chunks.append(chunk)
+        except HermesStreamSetupError as err:
+            _LOGGER.debug(
+                "Hermes streaming setup failed; falling back to non-streaming: %s",
+                err,
+            )
+            result = await self.client.async_send_message(messages, session_id=session_id)
+            return result.text
+        except HermesApiError:
+            if chunks:
+                _LOGGER.warning(
+                    "Hermes stream failed after content started; not retrying to avoid duplicate tool calls"
+                )
+            raise
+        return "".join(chunks)
 
     async def _get_user_name(self, user_input: ConversationInput) -> str:
         """Resolve the display name of the user from HA auth."""

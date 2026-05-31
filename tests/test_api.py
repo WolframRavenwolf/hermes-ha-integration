@@ -4,7 +4,10 @@ import json
 import unittest
 
 from tests.test_support import FakeClientTimeout
-from custom_components.hermes_conversation.api import HermesApiClient
+from custom_components.hermes_conversation.api import (
+    HermesApiClient,
+    HermesStreamSetupError,
+)
 
 
 class FakeResponse:
@@ -122,6 +125,60 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.calls[0]["headers"]["X-Hermes-Session-Id"], "old-session")
         self.assertEqual(session.calls[0]["timeout"].total, 30)
         self.assertEqual(session.calls[0]["timeout"].sock_read, 12)
+
+    async def test_streaming_ignores_custom_sse_events(self):
+        chunks = [
+            "event: hermes.tool.progress\n",
+            "data: "
+            + json.dumps(
+                {"choices": [{"delta": {"content": "do not speak"}}], "tool": "terminal"}
+            )
+            + "\n",
+            "\n",
+            "data: "
+            + json.dumps({"choices": [{"delta": {"content": "Safe answer"}}]})
+            + "\n",
+            "data: [DONE]\n",
+        ]
+        session = FakeSession([FakeResponse(chunks=chunks)])
+        client = HermesApiClient(session=session, host="agent.local", port=8443)
+
+        parts = []
+        async for part in client.async_stream_message(
+            [{"role": "user", "content": "hi"}]
+        ):
+            parts.append(part)
+
+        self.assertEqual(parts, ["Safe answer"])
+
+    async def test_streaming_ignores_tool_call_deltas(self):
+        chunks = [
+            "data: "
+            + json.dumps({"choices": [{"delta": {"tool_calls": [{"id": "call-1"}]}}]})
+            + "\n",
+            "data: " + json.dumps({"choices": [{"delta": {"content": "Done"}}]}) + "\n",
+            "data: [DONE]\n",
+        ]
+        session = FakeSession([FakeResponse(chunks=chunks)])
+        client = HermesApiClient(session=session, host="agent.local", port=8443)
+
+        parts = []
+        async for part in client.async_stream_message(
+            [{"role": "user", "content": "hi"}]
+        ):
+            parts.append(part)
+
+        self.assertEqual(parts, ["Done"])
+
+    async def test_streaming_rejected_status_raises_setup_error(self):
+        session = FakeSession([FakeResponse(status=400, text_data="stream unsupported")])
+        client = HermesApiClient(session=session, host="agent.local", port=8443)
+
+        with self.assertRaises(HermesStreamSetupError):
+            async for _part in client.async_stream_message(
+                [{"role": "user", "content": "hi"}]
+            ):
+                pass
 
 
 if __name__ == "__main__":
