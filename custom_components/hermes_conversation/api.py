@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator
 
 import aiohttp
 
+from .compat import normalize_host, normalize_profile
 from .const import (
     API_CHAT_COMPLETIONS,
     API_HEALTH,
@@ -57,13 +58,22 @@ class HermesApiClient:
         api_key: str | None = None,
         use_ssl: bool = True,
         verify_ssl: bool = False,
+        profile: str | None = None,
         model: str | None = None,
         request_timeout: int = DEFAULT_TIMEOUT,
         stream_timeout: int = DEFAULT_STREAM_TIMEOUT,
     ) -> None:
         self._session = session
         scheme = "https" if use_ssl else "http"
-        self._base_url = f"{scheme}://{host}:{port}"
+        normalized_host = normalize_host(host)
+        url_host = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+        root_url = f"{scheme}://{url_host}:{port}"
+        normalized_profile = normalize_profile(profile)
+        self._base_url = (
+            f"{root_url}/profile/{normalized_profile}"
+            if normalized_profile
+            else root_url
+        )
         self._api_key = api_key
         self._model = model or DEFAULT_MODEL
         self._request_timeout = max(1, int(request_timeout))
@@ -90,22 +100,67 @@ class HermesApiClient:
         return headers
 
     async def async_check_connection(self) -> bool:
-        """Check if the Hermes Agent API is reachable and auth is valid."""
+        """Check Hermes identity, reachability, and Bearer authentication."""
+        timeout = aiohttp.ClientTimeout(total=10)
+        legacy_health_missing = False
         try:
             async with self._session.get(
                 f"{self._base_url}{API_HEALTH}",
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=10),
+                headers={},
+                timeout=timeout,
                 ssl=self._ssl,
+                allow_redirects=False,
             ) as resp:
-                if resp.status == 401:
+                if resp.status == 404:
+                    # Hermes releases before 2026-03-28 do not expose
+                    # /v1/health. The authenticated models probe below remains
+                    # authoritative for both API identity and reachability.
+                    legacy_health_missing = True
+                elif resp.status != 200:
+                    raise HermesConnectionError(
+                        f"Hermes API health check returned HTTP {resp.status}"
+                    )
+                else:
+                    health = await resp.json()
+                    if not isinstance(health, dict) or (
+                        health.get("status") != "ok"
+                        or health.get("platform") != "hermes-agent"
+                    ):
+                        raise HermesConnectionError(
+                            "Health endpoint did not identify a Hermes Agent API"
+                        )
+
+            async with self._session.get(
+                f"{self._base_url}{API_MODELS}",
+                headers=self._headers(),
+                timeout=timeout,
+                ssl=self._ssl,
+                allow_redirects=False,
+            ) as resp:
+                if resp.status in (401, 403):
                     raise HermesAuthError("Invalid API key")
-                if resp.status == 403:
-                    raise HermesAuthError("Access denied")
-                return resp.status < 400
-        except HermesAuthError:
+                if resp.status != 200:
+                    raise HermesConnectionError(
+                        f"Hermes API authentication probe returned HTTP {resp.status}"
+                    )
+                models = await resp.json()
+                if not isinstance(models, dict) or not isinstance(
+                    models.get("data"), list
+                ):
+                    raise HermesConnectionError(
+                        "Models endpoint returned an invalid Hermes API response"
+                    )
+                if legacy_health_missing and not any(
+                    isinstance(model, dict) and model.get("owned_by") == "hermes"
+                    for model in models["data"]
+                ):
+                    raise HermesConnectionError(
+                        "Legacy models endpoint did not identify a Hermes Agent API"
+                    )
+            return True
+        except (HermesAuthError, HermesConnectionError):
             raise
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
             raise HermesConnectionError(
                 f"Cannot connect to Hermes Agent at {self._base_url}: {err}"
             ) from err

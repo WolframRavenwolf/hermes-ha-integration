@@ -7,27 +7,43 @@
         "data": {
           "host": "Host",
           "port": "Port",
+          "profile": "Profile",
           "api_key": "API Key",
           "use_ssl": "Use HTTPS",
           "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "profile": "Optional sanitized add-on profile route name (for example, worker). Leave blank for the primary profile."
         }
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to Hermes Agent. Check host and port.",
+      "cannot_connect": "Cannot connect to Hermes Agent. Check host, port, and profile.",
       "invalid_auth": "Invalid API key.",
+      "invalid_host": "Invalid host. Enter a DNS name or IP address only, without a scheme, path, user info, query, or fragment.",
+      "invalid_profile": "Invalid profile. Enter the sanitized route name shown by the add-on: letters, numbers, and single underscores only, with no trailing underscore.",
       "unknown": "An unexpected error occurred."
     },
     "abort": {
-      "already_configured": "This Hermes Agent instance is already configured."
+      "already_configured": "This Hermes Agent endpoint and profile are already configured."
     }
   },
   "options": {
+    "error": {
+      "already_configured": "This Hermes Agent endpoint and profile are already configured.",
+      "cannot_connect": "Cannot connect to Hermes Agent. Check host, port, and profile.",
+      "entry_changed": "This entry changed while the connection was being checked. Review the current values and try again.",
+      "invalid_auth": "Invalid API key.",
+      "invalid_host": "Invalid host. Enter a DNS name or IP address only, without a scheme, path, user info, query, or fragment.",
+      "invalid_profile": "Invalid profile. Enter the sanitized route name shown by the add-on: letters, numbers, and single underscores only, with no trailing underscore.",
+      "unknown": "An unexpected error occurred."
+    },
     "step": {
       "init": {
         "data": {
           "host": "Host",
           "port": "Port",
+          "profile": "Profile",
           "api_key": "API Key",
           "use_ssl": "Use HTTPS",
           "verify_ssl": "Verify SSL certificate",
@@ -43,6 +59,7 @@
           "fallback_tts_engine": "Fallback TTS entity_id"
         },
         "data_description": {
+          "profile": "Optional sanitized add-on profile route name (for example, worker). Leave blank for the primary profile.",
           "continued_conversation_mode": "Choose when Home Assistant keeps listening after a Hermes reply: never, always, or only when Hermes asks a follow-up question."
         }
       }

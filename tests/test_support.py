@@ -13,10 +13,11 @@ if str(REPO_ROOT) not in sys.path:
 
 
 class FakeConfigEntry:
-    def __init__(self, data=None, options=None, entry_id="entry-1"):
+    def __init__(self, data=None, options=None, entry_id="entry-1", title="Hermes Agent"):
         self.data = data or {}
         self.options = options or {}
         self.entry_id = entry_id
+        self.title = title
         self.update_listeners = []
 
     def add_update_listener(self, listener):
@@ -149,16 +150,39 @@ class FakeAuthStore:
 
 
 class FakeConfigEntries:
-    def __init__(self):
+    def __init__(self, hass=None):
+        self.hass = hass
         self.updated = []
         self.reloaded = []
         self.forwarded = []
         self.unloaded = []
+        self.entries = []
+        self.pending_updates = []
 
-    def async_update_entry(self, entry, *, data=None):
-        if data is not None:
+    def async_entries(self, _domain=None):
+        return list(self.entries)
+
+    def async_update_entry(self, entry, *, data=None, title=None, options=None):
+        changed = False
+        if data is not None and data != entry.data:
             entry.data = data
-        self.updated.append((entry, data))
+            changed = True
+        if title is not None and title != entry.title:
+            entry.title = title
+            changed = True
+        if options is not None and options != entry.options:
+            entry.options = options
+            changed = True
+        if changed:
+            self.updated.append((entry, data, title, options))
+            self.pending_updates.append(entry)
+
+    async def async_process_pending_updates(self):
+        pending = self.pending_updates
+        self.pending_updates = []
+        for entry in pending:
+            for listener in entry.update_listeners:
+                await listener(self.hass, entry)
 
     async def async_reload(self, entry_id):
         self.reloaded.append(entry_id)
@@ -171,7 +195,10 @@ class FakeConfigEntries:
         return True
 
     def async_get_entry(self, entry_id):
-        return None
+        return next(
+            (entry for entry in self.entries if entry.entry_id == entry_id),
+            None,
+        )
 
 
 class FakeServices:
@@ -204,7 +231,7 @@ class FakeHass:
         self.services = FakeServices()
         self.states = FakeStates(states)
         self.data = {}
-        self.config_entries = FakeConfigEntries()
+        self.config_entries = FakeConfigEntries(self)
         self._device_registry = SimpleNamespace(async_get=lambda device_id: None)
         self._area_registry = SimpleNamespace(async_get_area=lambda area_id: None)
 
@@ -215,9 +242,39 @@ def install_stubs():
 
     ha = types.ModuleType("homeassistant")
     config_entries = types.ModuleType("homeassistant.config_entries")
+    class FakeFlowBase:
+        def __init__(self):
+            self.hass = None
+
+        def async_show_form(self, *, step_id, data_schema, errors=None):
+            return {
+                "type": "form",
+                "step_id": step_id,
+                "data_schema": data_schema,
+                "errors": errors or {},
+            }
+
+        def async_create_entry(self, *, title, data):
+            return {"type": "create_entry", "title": title, "data": data}
+
+    class FakeConfigFlow(FakeFlowBase):
+        def __init_subclass__(cls, **kwargs):
+            cls.domain = kwargs.pop("domain", None)
+            super().__init_subclass__()
+
+        def __init__(self):
+            super().__init__()
+            self._current_entries = []
+
+        def _async_current_entries(self):
+            return list(self._current_entries)
+
+    class FakeOptionsFlow(FakeFlowBase):
+        pass
+
     config_entries.ConfigEntry = FakeConfigEntry
-    config_entries.ConfigFlow = type("ConfigFlow", (), {})
-    config_entries.OptionsFlow = type("OptionsFlow", (), {})
+    config_entries.ConfigFlow = FakeConfigFlow
+    config_entries.OptionsFlow = FakeOptionsFlow
 
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = FakeHass
@@ -228,7 +285,13 @@ def install_stubs():
     const.Platform = SimpleNamespace(CONVERSATION="conversation")
 
     data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
-    data_entry_flow.AbortFlow = type("AbortFlow", (Exception,), {})
+
+    class FakeAbortFlow(Exception):
+        def __init__(self, reason):
+            super().__init__(reason)
+            self.reason = reason
+
+    data_entry_flow.AbortFlow = FakeAbortFlow
 
     conversation = types.ModuleType("homeassistant.components.conversation")
     conversation.AbstractConversationAgent = type("AbstractConversationAgent", (), {})

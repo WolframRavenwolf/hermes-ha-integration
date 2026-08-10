@@ -6,6 +6,8 @@ import unittest
 from tests.test_support import FakeClientTimeout
 from custom_components.hermes_conversation.api import (
     HermesApiClient,
+    HermesAuthError,
+    HermesConnectionError,
     HermesStreamSetupError,
 )
 
@@ -53,19 +55,261 @@ class FakeSession:
         )
         return self.responses.pop(0)
 
-    def get(self, url, *, headers=None, timeout=None, ssl=None):
+    def get(
+        self,
+        url,
+        *,
+        headers=None,
+        timeout=None,
+        ssl=None,
+        allow_redirects=None,
+    ):
         self.calls.append(
             {
                 "url": url,
                 "headers": headers,
                 "timeout": timeout,
                 "ssl": ssl,
+                "allow_redirects": allow_redirects,
             }
         )
         return self.responses.pop(0)
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _health_response():
+        return FakeResponse(
+            json_data={
+                "status": "ok",
+                "platform": "hermes-agent",
+                "version": "test",
+            }
+        )
+
+    async def test_connection_probe_requires_authenticated_models_after_public_health(self):
+        session = FakeSession(
+            [self._health_response(), FakeResponse(status=401)]
+        )
+        client = HermesApiClient(
+            session=session,
+            host="agent.local",
+            port=8443,
+            api_key="wrong-key",
+            profile="worker",
+        )
+
+        with self.assertRaises(HermesAuthError):
+            await client.async_check_connection()
+
+        self.assertEqual(
+            [call["url"] for call in session.calls],
+            [
+                "https://agent.local:8443/profile/worker/v1/health",
+                "https://agent.local:8443/profile/worker/v1/models",
+            ],
+        )
+        self.assertFalse(session.calls[0]["allow_redirects"])
+        self.assertFalse(session.calls[1]["allow_redirects"])
+        self.assertEqual(session.calls[0]["headers"], {})
+        self.assertEqual(
+            session.calls[1]["headers"],
+            {"Authorization": "Bearer wrong-key"},
+        )
+
+    async def test_connection_probe_falls_back_to_models_when_legacy_health_is_missing(self):
+        session = FakeSession(
+            [
+                FakeResponse(status=404),
+                FakeResponse(
+                    json_data={
+                        "data": [
+                            {"id": "hermes-agent", "owned_by": "hermes"}
+                        ]
+                    }
+                ),
+            ]
+        )
+        client = HermesApiClient(
+            session=session,  # type: ignore[arg-type]
+            host="agent.local",
+            port=8443,
+            api_key="legacy-key",
+            profile="worker",
+        )
+
+        self.assertTrue(await client.async_check_connection())
+        self.assertEqual(session.calls[0]["headers"], {})
+        self.assertEqual(
+            session.calls[1]["headers"],
+            {"Authorization": "Bearer legacy-key"},
+        )
+        self.assertEqual(
+            [call["url"] for call in session.calls],
+            [
+                "https://agent.local:8443/profile/worker/v1/health",
+                "https://agent.local:8443/profile/worker/v1/models",
+            ],
+        )
+
+    async def test_legacy_fallback_rejects_generic_openai_models_response(self):
+        session = FakeSession(
+            [
+                FakeResponse(status=404),
+                FakeResponse(
+                    json_data={
+                        "data": [{"id": "generic-model", "owned_by": "other"}]
+                    }
+                ),
+            ]
+        )
+        client = HermesApiClient(
+            session,  # type: ignore[arg-type]
+            "agent.local",
+            8443,
+            api_key="key",
+        )
+
+        with self.assertRaises(HermesConnectionError):
+            await client.async_check_connection()
+
+    async def test_connection_probe_rejects_non_hermes_health_body(self):
+        session = FakeSession([FakeResponse(json_data={"status": "ok"})])
+        client = HermesApiClient(session, "agent.local", 8443)
+
+        with self.assertRaises(HermesConnectionError):
+            await client.async_check_connection()
+
+    async def test_connection_probe_rejects_health_redirect(self):
+        session = FakeSession(
+            [
+                FakeResponse(
+                    status=302,
+                    json_data={"status": "ok", "platform": "hermes-agent"},
+                )
+            ]
+        )
+        client = HermesApiClient(session, "agent.local", 8443)
+
+        with self.assertRaises(HermesConnectionError):
+            await client.async_check_connection()
+
+    def test_base_url_uses_root_for_blank_profile(self):
+        client = HermesApiClient(
+            session=FakeSession([]),
+            host="agent.local",
+            port=8443,
+            profile="",
+        )
+
+        self.assertEqual(client.base_url, "https://agent.local:8443")
+
+    def test_base_url_normalizes_valid_profile(self):
+        client = HermesApiClient(
+            session=FakeSession([]),
+            host="agent.local",
+            port=8443,
+            profile=" assistant_2 ",
+        )
+
+        self.assertEqual(
+            client.base_url,
+            "https://agent.local:8443/profile/assistant_2",
+        )
+
+    def test_base_url_normalizes_dns_host_and_brackets_ipv6(self):
+        dns_client = HermesApiClient(FakeSession([]), " AGENT.LOCAL. ", 8443)
+        ipv6_client = HermesApiClient(FakeSession([]), "[2001:0db8::1]", 8443)
+
+        self.assertEqual(dns_client.base_url, "https://agent.local:8443")
+        self.assertEqual(ipv6_client.base_url, "https://[2001:db8::1]:8443")
+
+    def test_base_url_rejects_non_host_input(self):
+        for host in (
+            "agent.local/path",
+            "user@agent.local",
+            "agent.local?query=1",
+            "agent.local#fragment",
+        ):
+            with self.subTest(host=host), self.assertRaises(ValueError):
+                HermesApiClient(FakeSession([]), host, 8443)
+
+    def test_base_url_rejects_invalid_profile(self):
+        with self.assertRaises(ValueError):
+            HermesApiClient(
+                session=FakeSession([]),
+                host="agent.local",
+                port=8443,
+                profile="../assistant",
+            )
+
+    async def test_profile_base_url_is_used_by_every_request_family(self):
+        chunks = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "ok"}}]}) + "\n",
+            "data: [DONE]\n",
+        ]
+        session = FakeSession(
+            [
+                self._health_response(),
+                FakeResponse(json_data={"data": [{"id": "hermes-agent"}]}),
+                FakeResponse(json_data={"data": []}),
+                FakeResponse(json_data={"choices": [{"message": {"content": "ok"}}]}),
+                FakeResponse(chunks=chunks),
+            ]
+        )
+        client = HermesApiClient(
+            session=session,
+            host="agent.local",
+            port=8443,
+            profile="worker",
+        )
+
+        self.assertTrue(await client.async_check_connection())
+        await client.async_get_models()
+        await client.async_send_message([{"role": "user", "content": "hello"}])
+        self.assertEqual(
+            [
+                part
+                async for part in client.async_stream_message(
+                    [{"role": "user", "content": "hello"}]
+                )
+            ],
+            ["ok"],
+        )
+
+        self.assertEqual(
+            [call["url"] for call in session.calls],
+            [
+                "https://agent.local:8443/profile/worker/v1/health",
+                "https://agent.local:8443/profile/worker/v1/models",
+                "https://agent.local:8443/profile/worker/v1/models",
+                "https://agent.local:8443/profile/worker/v1/chat/completions",
+                "https://agent.local:8443/profile/worker/v1/chat/completions",
+            ],
+        )
+
+    async def test_health_non_success_status_raises_connection_error(self):
+        client = HermesApiClient(
+            session=FakeSession([FakeResponse(status=500)]),
+            host="agent.local",
+            port=8443,
+        )
+
+        with self.assertRaises(HermesConnectionError):
+            await client.async_check_connection()
+
+    async def test_health_unauthorized_statuses_are_connection_errors(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                client = HermesApiClient(
+                    session=FakeSession([FakeResponse(status=status)]),
+                    host="agent.local",
+                    port=8443,
+                )
+
+                with self.assertRaises(HermesConnectionError):
+                    await client.async_check_connection()
+
     async def test_non_streaming_preserves_session_header_and_model_timeout(self):
         session = FakeSession(
             [

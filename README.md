@@ -16,7 +16,7 @@ A [Home Assistant](https://home-assistant.io/) custom integration that connects 
 - **Multi-turn** — supports both local HA-side history and Hermes-backed session reuse
 - **Username resolution** — passes the user's name to the agent
 - **Configurable** — connection settings and prompt options can be changed anytime via Configure
-- **Multiple instances** — connect to both the local add-on and an external Hermes Agent
+- **Multiple instances and profiles** — connect Assist agents to the primary API or separate add-on profile routes
 
 ## Requirements
 
@@ -47,10 +47,11 @@ A [Home Assistant](https://home-assistant.io/) custom integration that connects 
 1. Make sure the Hermes Agent add-on is running with **Enable API** turned on
 2. Go to **Settings → Devices & Services → Add Integration**
 3. Search for "Hermes Agent"
-4. Enter the **Host**, **Port** (default: 8443), and the **API Key** (the Access Password from the add-on configuration)
-5. **Use HTTPS** is on by default (the add-on uses a self-signed certificate)
-6. **Verify SSL certificate** is off by default (for self-signed certs)
-7. Click **Submit**
+4. Enter the **Host** as a DNS name or IP address only (no scheme, path, user info, query, or fragment), the **Port** (default: 8443), and the **API Key** (the Access Password from the add-on configuration)
+5. Leave **Profile** blank for the primary/root API, or enter a sanitized add-on profile route name such as `worker`
+6. **Use HTTPS** is on by default (the add-on uses a self-signed certificate)
+7. **Verify SSL certificate** is off by default (for self-signed certs)
+8. Click **Submit**
 
 ### Using as Voice Assistant
 
@@ -65,8 +66,9 @@ After setup, all settings can be changed via **Settings → Devices & Services �
 
 | Option                                   | Default             | Description                                                                            |
 | ---------------------------------------- | ------------------- | -------------------------------------------------------------------------------------- |
-| Host                                     | homeassistant.local | Hermes Agent hostname or IP                                                            |
+| Host                                     | homeassistant.local | Hermes Agent DNS name or IP only; do not include scheme, path, user info, query, or fragment     |
 | Port                                     | 8443                | API port                                                                               |
+| Profile                                  | (empty)             | Sanitized add-on profile route name; blank selects the primary/root API                |
 | API Key                                  | (empty)             | API key (the Access Password from the add-on configuration)                            |
 | Use HTTPS                                | Yes                 | Connect via HTTPS                                                                      |
 | Verify SSL certificate                   | No                  | Verify the SSL certificate (disable for self-signed)                                   |
@@ -80,6 +82,12 @@ After setup, all settings can be changed via **Settings → Devices & Services �
 | Always speak replies through fallback    | No                  | Also send voice replies through a fallback `tts.speak` target for device-origin turns  |
 | Fallback media player entity_id          | (empty)             | Media player target for fallback speech                                                |
 | Fallback TTS entity_id                   | (empty)             | TTS entity used for fallback speech                                                    |
+
+### Add-on profiles
+
+Create one Hermes Agent integration entry for each Assist agent that should use a different add-on profile. Leave **Profile** blank for the primary profile. For another profile, enter the sanitized route name shown by the add-on, for example `worker` or `assistant_2`. Use letters, numbers, and single underscores only; the value cannot end with an underscore. The value is not a filesystem path: do not enter a directory, `/profile/worker`, or any slash-containing value. Setup and connection-changing Configure submissions first query public `/v1/health` without sending the API key, then use authenticated `/v1/models` to verify the Bearer key before saving. For older Hermes versions that do not provide `/v1/health` and return `404`, the authenticated models response must contain at least one entry owned by `hermes`; it remains the required identity, reachability, and authentication check. Configure revalidates both the entry snapshot and endpoint/profile uniqueness under a shared lock immediately before committing, so concurrent changes cannot create duplicates or silently overwrite a validated update.
+
+If your installed integration version does not show the **Profile** field yet, the immediate workaround is to make the desired profile primary in the add-on, then leave the integration's profile blank. After updating to a version with profile routing, select each profile through its own integration entry and assign that entry to the desired Home Assistant Assist agent.
 
 The default system prompt includes the current date/time, timezone, the user's name, the home name, and exposed device states (if enabled). Entity exposure is off by default since Hermes Agent can access Home Assistant entities directly when a Home Assistant token is configured in the Hermes Agent add-on.
 

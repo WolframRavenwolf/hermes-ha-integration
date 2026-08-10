@@ -8,6 +8,7 @@ DOMAIN = "hermes_conversation"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_API_KEY = "api_key"
+CONF_PROFILE = "profile"
 CONF_USE_SSL = "use_ssl"
 CONF_VERIFY_SSL = "verify_ssl"
 
@@ -78,4 +79,4 @@ DEFAULT_PROMPT = (
 # ---------------------------------------------------------------------------
 API_CHAT_COMPLETIONS = "/v1/chat/completions"
 API_MODELS = "/v1/models"
-API_HEALTH = "/health"
+API_HEALTH = "/v1/health"
