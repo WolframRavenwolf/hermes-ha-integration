@@ -17,6 +17,7 @@ A [Home Assistant](https://home-assistant.io/) custom integration that connects 
 - **Username resolution** — passes the user's name to the agent
 - **Configurable** — connection settings and prompt options can be changed anytime via Configure
 - **Multiple instances and profiles** — connect Assist agents to the root API, Home Assistant add-on profile routes, or native Hermes multiplexer routes
+- **Diagnostic entities** — one device per config entry exposes authenticated API connectivity, optional health, API latency, and last successful connection
 
 ## Requirements
 
@@ -121,11 +122,59 @@ Auto asks Hermes to put one direct question last, with nothing after the questio
 mark. It still checks the final sentence, not earlier quoted questions or
 language-specific phrases such as "Tell me what time."
 
+## Diagnostic entities
+
+Each config entry creates one Home Assistant device that groups the conversation agent with four diagnostic entities. A shared coordinator polls the selected profile once every 60 seconds. Conversation setup is not blocked when the API is down; connectivity turns off and recovers on later polls.
+
+| Entity | What it means |
+| ------ | ------------- |
+| `binary_sensor.hermes_agent_api_connectivity` | Authenticated reachability of the selected route. On means the existing connection probe succeeded (`/v1/health` identity plus authenticated `/v1/models`). Off means the API is currently unreachable or unauthorized. This is **not** provider/model readiness. |
+| `sensor.hermes_agent_health` | Optional authenticated `/health/detailed` status: `ok` or `degraded`. HTTP 200 can still be `degraded`. Unavailable when the endpoint is absent, uses an unsupported method, redirects, returns malformed JSON/status, or otherwise cannot be interpreted. Public `/health` success is not authentication. |
+| `sensor.hermes_agent_api_latency` | Duration of the authenticated connection probe in milliseconds. This is not model or chat latency. Unavailable while connectivity is off. |
+| `sensor.hermes_agent_last_successful_connection` | UTC timestamp of the last successful authenticated connection. The previous value is preserved while the API is offline. Unavailable until the first success. |
+
+Entity IDs follow the config-entry title. The examples above use the default title `Hermes Agent`. A second entry titled `Worker` would use names such as `binary_sensor.worker_api_connectivity`.
+
+### Semantics and fallbacks
+
+- Connectivity is authenticated. A public health `200` is not enough; `/v1/models` `401`/`403` is offline.
+- Optional health is requested on the **same** selected `base_url` (`/`, `/profile/<name>`, or `/p/<name>`). The integration never falls back from a named profile to the root and never sends credentials before native route canary checks.
+- Legacy Hermes builds that return `404` for `/v1/health` still authenticate through `/v1/models` when the models list identifies Hermes.
+- `/health/detailed` `404`/`405`/`501`, malformed responses and server errors leave health unavailable while basic connectivity can stay on. A `401`/`403` makes connectivity off too.
+- Polling uses only health and model-list endpoints; it never runs the model or spends tokens. Health reports Hermes's internal readiness, not a live provider test. See the [Hermes API documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#get-healthdetailed).
+- Uptime and activity counters are not exposed: these require reliable server telemetry with an unambiguous scope. Last successful connection is not the agent's start time and resets when the entry reloads.
+- Missing optional health is not idle. Use connectivity `off` for outage automations.
+- Attributes only expose sanitized error categories (`auth`, `timeout`, `redirect`, `unsupported`, `malformed`, `server`, `unreachable`). Raw response bodies, credentials, and detailed health payloads are never copied into entity state.
+
+### Example: notify when connectivity stays off
+
+```yaml
+automation:
+  - alias: Hermes API connectivity lost
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.hermes_agent_api_connectivity
+        to: "off"
+        for: "00:02:00"
+    action:
+      - service: persistent_notification.create
+        data:
+          title: Hermes Agent
+          message: Authenticated API connectivity has been off for 2 minutes.
+```
+
 ## How It Works
 
 This integration communicates with Hermes Agent's OpenAI-compatible API (`/v1/chat/completions`) using only Home Assistant's built-in HTTP client — **no external Python dependencies**.
 
 Hermes Agent handles tool execution (controlling lights, checking sensors, etc.) server-side through its own Home Assistant tools. This means the conversation integration stays simple: it sends your message, gets back the response (which may include results from tool actions the agent performed), and displays it.
+
+## Development tests
+
+Run the dependency-free unit suite with `python -m unittest discover -s tests -v`.
+Those tests use Home Assistant stubs. The separate [runtime test suite](runtime_tests/README.md)
+uses real Home Assistant registries, states and lifecycle with a loopback Hermes API.
+Run the two suites in separate processes to keep the stubs isolated.
 
 ## License
 

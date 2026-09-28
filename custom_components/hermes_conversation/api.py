@@ -14,10 +14,21 @@ from .compat import normalize_host, normalize_profile, normalize_profile_route
 from .const import (
     API_CHAT_COMPLETIONS,
     API_HEALTH,
+    API_HEALTH_DETAILED,
     API_MODELS,
     DEFAULT_MODEL,
     DEFAULT_STREAM_TIMEOUT,
     DEFAULT_TIMEOUT,
+    ERROR_CATEGORY_AUTH,
+    ERROR_CATEGORY_MALFORMED,
+    ERROR_CATEGORY_REDIRECT,
+    ERROR_CATEGORY_SERVER,
+    ERROR_CATEGORY_TIMEOUT,
+    ERROR_CATEGORY_UNREACHABLE,
+    ERROR_CATEGORY_UNSUPPORTED,
+    HEALTH_STATUSES,
+    REDIRECT_STATUS_CODES,
+    UNSUPPORTED_DETAILED_STATUS_CODES,
     ProfileRouteFamily,
 )
 
@@ -31,6 +42,17 @@ class HermesApiError(Exception):
 
 class HermesConnectionError(HermesApiError):
     """Cannot reach the Hermes Agent API."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_category: str = ERROR_CATEGORY_UNREACHABLE,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_category = error_category
 
 
 class HermesAuthError(HermesApiError):
@@ -47,6 +69,16 @@ class HermesApiResult:
 
     text: str
     session_id: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class HermesDetailedHealthResult:
+    """Whitelisted optional /health/detailed outcome; never stores raw payload."""
+
+    available: bool
+    status: str | None
+    error_category: str | None
+    auth_failed: bool = False
 
 
 class HermesApiClient:
@@ -111,6 +143,19 @@ class HermesApiClient:
             headers["X-Hermes-Session-Id"] = session_id
         return headers
 
+    def _classify_status_error(self, status: int) -> HermesConnectionError:
+        if status in REDIRECT_STATUS_CODES:
+            category = ERROR_CATEGORY_REDIRECT
+        elif status >= 500:
+            category = ERROR_CATEGORY_SERVER
+        else:
+            category = ERROR_CATEGORY_UNREACHABLE
+        return HermesConnectionError(
+            "Hermes API request failed",
+            status_code=status,
+            error_category=category,
+        )
+
     async def _async_verify_native_profile_route(self) -> bool:
         """Verify that a named native route selects and identifies its profile."""
         if not (
@@ -132,10 +177,7 @@ class HermesApiClient:
                 allow_redirects=False,
             ) as resp:
                 if resp.status != 404:
-                    raise HermesConnectionError(
-                        "Native profile routing is not fail-closed. Enable "
-                        "Hermes profile multiplexing or update Hermes Agent."
-                    )
+                    raise self._classify_status_error(resp.status)
 
             async with self._session.get(
                 f"{self._base_url}{API_HEALTH}",
@@ -145,25 +187,23 @@ class HermesApiClient:
                 allow_redirects=False,
             ) as resp:
                 if resp.status != 200:
-                    raise HermesConnectionError(
-                        "Native profile route did not expose the required Hermes "
-                        f"health endpoint (HTTP {resp.status})"
-                    )
+                    raise self._classify_status_error(resp.status)
                 health = await resp.json()
                 if not isinstance(health, dict) or (
                     health.get("status") != "ok"
                     or health.get("platform") != "hermes-agent"
                 ):
                     raise HermesConnectionError(
-                        "Native profile route did not identify a Hermes Agent API"
+                        "Native profile route did not identify a Hermes Agent API",
+                        error_category=ERROR_CATEGORY_MALFORMED,
                     )
             return True
         except HermesConnectionError:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
             raise HermesConnectionError(
-                f"Cannot verify native Hermes profile routing at "
-                f"{self._base_url}: {err}"
+                "Cannot verify native Hermes profile routing",
+                error_category=_transport_error_category(err),
             ) from err
 
     async def async_check_connection(self) -> bool:
@@ -189,9 +229,7 @@ class HermesApiClient:
                         # authoritative for both API identity and reachability.
                         legacy_health_missing = True
                     elif resp.status != 200:
-                        raise HermesConnectionError(
-                            f"Hermes API health check returned HTTP {resp.status}"
-                        )
+                        raise self._classify_status_error(resp.status)
                     else:
                         health = await resp.json()
                         if not isinstance(health, dict) or (
@@ -199,7 +237,8 @@ class HermesApiClient:
                             or health.get("platform") != "hermes-agent"
                         ):
                             raise HermesConnectionError(
-                                "Health endpoint did not identify a Hermes Agent API"
+                                "Health endpoint did not identify a Hermes Agent API",
+                                error_category=ERROR_CATEGORY_MALFORMED,
                             )
 
             async with self._session.get(
@@ -212,15 +251,14 @@ class HermesApiClient:
                 if resp.status in (401, 403):
                     raise HermesAuthError("Invalid API key")
                 if resp.status != 200:
-                    raise HermesConnectionError(
-                        f"Hermes API authentication probe returned HTTP {resp.status}"
-                    )
+                    raise self._classify_status_error(resp.status)
                 models = await resp.json()
                 if not isinstance(models, dict) or not isinstance(
                     models.get("data"), list
                 ):
                     raise HermesConnectionError(
-                        "Models endpoint returned an invalid Hermes API response"
+                        "Models endpoint returned an invalid Hermes API response",
+                        error_category=ERROR_CATEGORY_MALFORMED,
                     )
                 if legacy_health_missing and not any(
                     isinstance(model, dict) and model.get("owned_by") == "hermes"
@@ -234,8 +272,56 @@ class HermesApiClient:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
             raise HermesConnectionError(
-                f"Cannot connect to Hermes Agent at {self._base_url}: {err}"
+                "Cannot connect to Hermes Agent",
+                error_category=_transport_error_category(err),
             ) from err
+
+    async def async_get_detailed_health(self) -> HermesDetailedHealthResult:
+        """Fetch optional authenticated /health/detailed on the selected route."""
+        await self._async_verify_native_profile_route()
+        timeout = aiohttp.ClientTimeout(total=10)
+        try:
+            async with self._session.get(
+                f"{self._base_url}{API_HEALTH_DETAILED}",
+                headers=self._headers(),
+                timeout=timeout,
+                ssl=self._ssl,
+                allow_redirects=False,
+            ) as resp:
+                if resp.status in (401, 403):
+                    return HermesDetailedHealthResult(
+                        available=False,
+                        status=None,
+                        error_category=ERROR_CATEGORY_AUTH,
+                        auth_failed=True,
+                    )
+                if (
+                    resp.status in REDIRECT_STATUS_CODES
+                    or resp.status in UNSUPPORTED_DETAILED_STATUS_CODES
+                ):
+                    return HermesDetailedHealthResult(
+                        available=False,
+                        status=None,
+                        error_category=ERROR_CATEGORY_UNSUPPORTED,
+                    )
+                if resp.status != 200:
+                    return HermesDetailedHealthResult(
+                        available=False,
+                        status=None,
+                        error_category=(
+                            ERROR_CATEGORY_SERVER
+                            if resp.status >= 500
+                            else ERROR_CATEGORY_UNREACHABLE
+                        ),
+                    )
+                payload = await resp.json()
+                return _parse_detailed_health(payload)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
+            return HermesDetailedHealthResult(
+                available=False,
+                status=None,
+                error_category=_transport_error_category(err),
+            )
 
     async def async_get_models(self) -> list[dict[str, Any]]:
         """Fetch available models from /v1/models."""
@@ -381,3 +467,39 @@ class HermesApiClient:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError):
             return data.get("error", {}).get("message", "(No response)")
+
+
+def _transport_error_category(err: BaseException) -> str:
+    if isinstance(err, asyncio.TimeoutError):
+        return ERROR_CATEGORY_TIMEOUT
+    if isinstance(err, ValueError):
+        return ERROR_CATEGORY_MALFORMED
+    return ERROR_CATEGORY_UNREACHABLE
+
+
+def _parse_detailed_health(payload: Any) -> HermesDetailedHealthResult:
+    if not isinstance(payload, dict):
+        return HermesDetailedHealthResult(
+            available=False,
+            status=None,
+            error_category=ERROR_CATEGORY_MALFORMED,
+        )
+    status = payload.get("status")
+    if not isinstance(status, str) or status not in HEALTH_STATUSES:
+        return HermesDetailedHealthResult(
+            available=False,
+            status=None,
+            error_category=ERROR_CATEGORY_MALFORMED,
+        )
+    platform = payload.get("platform")
+    if platform is not None and platform != "hermes-agent":
+        return HermesDetailedHealthResult(
+            available=False,
+            status=None,
+            error_category=ERROR_CATEGORY_MALFORMED,
+        )
+    return HermesDetailedHealthResult(
+        available=True,
+        status=status,
+        error_category=None,
+    )

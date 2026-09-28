@@ -35,7 +35,7 @@ class InitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sessions", hass.data[DOMAIN][entry.entry_id])
         self.assertEqual(
             hass.config_entries.forwarded,
-            [(entry.entry_id, ("conversation",))],
+            [(entry.entry_id, ("conversation", "sensor", "binary_sensor"))],
         )
 
     async def test_setup_passes_profile_to_api_client(self):
@@ -128,7 +128,7 @@ class InitTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(DOMAIN, hass.data)
         self.assertEqual(
             hass.config_entries.unloaded,
-            [(entry.entry_id, ("conversation",))],
+            [(entry.entry_id, ("conversation", "sensor", "binary_sensor"))],
         )
 
 

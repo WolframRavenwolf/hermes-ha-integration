@@ -32,6 +32,28 @@
       "already_configured": "This Hermes Agent endpoint and profile are already configured."
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "api_connectivity": {
+        "name": "API connectivity"
+      }
+    },
+    "sensor": {
+      "health": {
+        "name": "Health",
+        "state": {
+          "ok": "OK",
+          "degraded": "Degraded"
+        }
+      },
+      "api_latency": {
+        "name": "API latency"
+      },
+      "last_successful_connection": {
+        "name": "Last successful connection"
+      }
+    }
+  },
   "options": {
     "error": {
       "already_configured": "This Hermes Agent endpoint and profile are already configured.",

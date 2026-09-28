@@ -30,6 +30,7 @@ from homeassistant.helpers import intent, template
 
 from .api import HermesApiClient, HermesApiError, HermesStreamSetupError
 from .compat import entry_value, resolve_continued_conversation_mode
+from .entity import hermes_device_info
 from .const import (
     CONF_ALWAYS_SPEAK_FALLBACK,
     CONF_API_KEY,
@@ -297,6 +298,7 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
         self.session_map = session_map
         self._attr_unique_id = entry.entry_id
         self._attr_name = getattr(entry, "title", None) or "Hermes Agent"
+        self._attr_device_info = hermes_device_info(entry)
         self._attr_supported_features = ConversationEntityFeature.CONTROL
         # conversation_id -> list of {"role": ..., "content": ...}
         self._history: OrderedDict[str, list[dict[str, str]]] = OrderedDict()

@@ -514,7 +514,13 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
             data=connection_input(),
             options={CONF_PROMPT: "old prompt"},
         )
-        hass = FakeHass(session=FakeSession(successful_probe_responses()))
+        hass = FakeHass(
+            session=FakeSession(
+                successful_probe_responses()
+                + [FakeResponse(status=404)]
+                + successful_probe_responses()
+            )
+        )
         hass.config_entries.entries = [entry]
         await integration.async_setup_entry(hass, entry)
         flow = self.make_flow(entry, hass=hass)
@@ -840,9 +846,9 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PublicationMetadataTests(unittest.TestCase):
-    def test_manifest_is_version_1_2_0(self):
+    def test_manifest_is_version_1_3_0(self):
         manifest = json.loads((COMPONENT_ROOT / "manifest.json").read_text())
-        self.assertEqual(manifest["version"], "1.2.0")
+        self.assertEqual(manifest["version"], "1.3.0")
 
     def test_strings_and_english_translation_are_equivalent(self):
         strings = json.loads((COMPONENT_ROOT / "strings.json").read_text())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from contextlib import contextmanager
@@ -19,13 +20,39 @@ class FakeConfigEntry:
         self.entry_id = entry_id
         self.title = title
         self.update_listeners = []
+        self._on_unload = []
+        self._background_tasks = set()
 
     def add_update_listener(self, listener):
         self.update_listeners.append(listener)
-        return listener
+
+        def _remove():
+            if listener in self.update_listeners:
+                self.update_listeners.remove(listener)
+
+        return _remove
 
     def async_on_unload(self, value):
+        self._on_unload.append(value)
         return value
+
+    def async_create_background_task(self, hass, target, name, eager_start=True):
+        task = hass.async_create_background_task(target, name, eager_start)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    async def async_execute_unload(self):
+        tasks = tuple(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        while self._on_unload:
+            callback = self._on_unload.pop()
+            result = callback()
+            if hasattr(result, "__await__"):
+                await result
 
 
 class FakeIntentResponse:
@@ -144,6 +171,14 @@ class FakeClientError(Exception):
     pass
 
 
+class FailingSession:
+    def get(self, *args, **kwargs):
+        raise FakeClientError("offline")
+
+    def post(self, *args, **kwargs):
+        raise FakeClientError("offline")
+
+
 class FakeAuthStore:
     async def async_get_user(self, user_id):
         return SimpleNamespace(name=f"user-{user_id}")
@@ -225,7 +260,7 @@ class FakeStates:
 
 class FakeHass:
     def __init__(self, *, session=None, states=None, location_name="Home"):
-        self._session = session
+        self._session = session if session is not None else FailingSession()
         self.config = SimpleNamespace(location_name=location_name)
         self.auth = FakeAuthStore()
         self.services = FakeServices()
@@ -235,6 +270,17 @@ class FakeHass:
         self._entity_registry = SimpleNamespace(async_get=lambda entity_id: None)
         self._device_registry = SimpleNamespace(async_get=lambda device_id: None)
         self._area_registry = SimpleNamespace(async_get_area=lambda area_id: None)
+        self._background_tasks = set()
+
+    def async_create_background_task(self, target, name, eager_start=True):
+        task = asyncio.create_task(target, name=name)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    async def async_block_till_done(self, wait_background_tasks=False):
+        if wait_background_tasks and self._background_tasks:
+            await asyncio.gather(*tuple(self._background_tasks))
 
 
 def install_stubs():
@@ -283,7 +329,11 @@ def install_stubs():
 
     const = types.ModuleType("homeassistant.const")
     const.MATCH_ALL = "*"
-    const.Platform = SimpleNamespace(CONVERSATION="conversation")
+    const.Platform = SimpleNamespace(
+        CONVERSATION="conversation",
+        SENSOR="sensor",
+        BINARY_SENSOR="binary_sensor",
+    )
 
     data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
 
@@ -305,12 +355,109 @@ def install_stubs():
     conversation.async_set_agent = lambda hass, entry, agent: hass.data.setdefault("set_agents", []).append((entry.entry_id, agent))
     conversation.async_unset_agent = lambda hass, entry: hass.data.setdefault("unset_agents", []).append(entry.entry_id)
 
-    class FakeConversationEntity:
+    class FakeEntity:
+        _attr_should_poll = False
+        _attr_unique_id = None
+        _attr_name = None
+        _attr_device_info = None
+        _attr_entity_category = None
+        _attr_translation_key = None
+        _attr_has_entity_name = False
+        _attr_available = True
+        _attr_extra_state_attributes = None
+        _attr_native_value = None
+        _attr_native_unit_of_measurement = None
+        _attr_device_class = None
+        _attr_state_class = None
+        _attr_options = None
+        _attr_is_on = None
+        hass = None
+
+        def __init__(self):
+            self._remove_callbacks = []
+            self.written_states = 0
+
+        def async_on_remove(self, func):
+            self._remove_callbacks.append(func)
+            return func
+
+        def async_write_ha_state(self):
+            self.written_states += 1
+
+        @property
+        def unique_id(self):
+            return self._attr_unique_id
+
+        @property
+        def name(self):
+            return self._attr_name
+
+        @property
+        def device_info(self):
+            return self._attr_device_info
+
+        @property
+        def entity_category(self):
+            return self._attr_entity_category
+
+        @property
+        def translation_key(self):
+            return self._attr_translation_key
+
+        @property
+        def has_entity_name(self):
+            return self._attr_has_entity_name
+
+        @property
+        def available(self):
+            return self._attr_available
+
+        @property
+        def extra_state_attributes(self):
+            return self._attr_extra_state_attributes
+
+        @property
+        def native_value(self):
+            return self._attr_native_value
+
+        @property
+        def native_unit_of_measurement(self):
+            return self._attr_native_unit_of_measurement
+
+        @property
+        def device_class(self):
+            return self._attr_device_class
+
+        @property
+        def state_class(self):
+            return self._attr_state_class
+
+        @property
+        def options(self):
+            return self._attr_options
+
+        @property
+        def is_on(self):
+            return self._attr_is_on
+
+    class FakeConversationEntity(FakeEntity):
         _attr_supports_streaming = False
 
         @property
         def supports_streaming(self):
             return self._attr_supports_streaming
+
+        @property
+        def unique_id(self):
+            return self._attr_unique_id
+
+        @property
+        def name(self):
+            return self._attr_name
+
+        @property
+        def device_info(self):
+            return self._attr_device_info
 
         async def async_added_to_hass(self):
             return None
@@ -347,6 +494,124 @@ def install_stubs():
 
     device_registry = types.ModuleType("homeassistant.helpers.device_registry")
     device_registry.async_get = lambda hass: hass._device_registry
+    device_registry.DeviceEntryType = SimpleNamespace(SERVICE="service")
+    device_registry.DeviceInfo = dict
+
+    entity = types.ModuleType("homeassistant.helpers.entity")
+    entity.Entity = FakeEntity
+    entity.EntityCategory = SimpleNamespace(CONFIG="config", DIAGNOSTIC="diagnostic")
+
+    class UpdateFailed(Exception):
+        pass
+
+    class FakeDataUpdateCoordinator:
+        def __init__(
+            self,
+            hass,
+            logger,
+            *,
+            name=None,
+            update_interval=None,
+            config_entry=None,
+            **kwargs,
+        ):
+            self.hass = hass
+            self.logger = logger
+            self.name = name
+            self.update_interval = update_interval
+            self.config_entry = config_entry
+            self.data = None
+            self.last_update_success = True
+            self._listeners = []
+            self.refresh_count = 0
+            self._shutdown_requested = False
+            self.shutdown = False
+            self.used_first_refresh = False
+            if self.config_entry:
+                self.config_entry.async_on_unload(self.async_shutdown)
+
+        def async_add_listener(self, update_callback, context=None):
+            self._listeners.append(update_callback)
+
+            def _remove():
+                if update_callback in self._listeners:
+                    self._listeners.remove(update_callback)
+
+            return _remove
+
+        def async_update_listeners(self):
+            for listener in list(self._listeners):
+                listener()
+
+        async def async_refresh(self):
+            if self._shutdown_requested:
+                return self.data
+            self.refresh_count += 1
+            self.data = await self._async_update_data()
+            self.last_update_success = True
+            self.async_update_listeners()
+            return self.data
+
+        async def async_config_entry_first_refresh(self):
+            self.used_first_refresh = True
+            exceptions = types.ModuleType("homeassistant.exceptions")
+            class ConfigEntryNotReady(Exception):
+                pass
+            try:
+                await self.async_refresh()
+            except Exception as err:
+                raise ConfigEntryNotReady from err
+
+        async def async_shutdown(self):
+            self._shutdown_requested = True
+            self.shutdown = True
+            self._listeners.clear()
+
+        def __class_getitem__(cls, item):
+            return cls
+
+    class FakeCoordinatorEntity(FakeEntity):
+        def __init__(self, coordinator):
+            super().__init__()
+            self.coordinator = coordinator
+
+        @property
+        def available(self):
+            return self.coordinator.last_update_success
+
+        async def async_added_to_hass(self):
+            self.async_on_remove(
+                self.coordinator.async_add_listener(self._handle_coordinator_update)
+            )
+
+        def _handle_coordinator_update(self):
+            self.async_write_ha_state()
+
+        def __class_getitem__(cls, item):
+            return cls
+
+    update_coordinator = types.ModuleType("homeassistant.helpers.update_coordinator")
+    update_coordinator.DataUpdateCoordinator = FakeDataUpdateCoordinator
+    update_coordinator.CoordinatorEntity = FakeCoordinatorEntity
+    update_coordinator.UpdateFailed = UpdateFailed
+
+    sensor = types.ModuleType("homeassistant.components.sensor")
+    sensor.SensorEntity = FakeEntity
+    sensor.SensorDeviceClass = SimpleNamespace(
+        ENUM="enum",
+        TIMESTAMP="timestamp",
+        DURATION="duration",
+    )
+    sensor.SensorStateClass = SimpleNamespace(MEASUREMENT="measurement")
+
+    binary_sensor = types.ModuleType("homeassistant.components.binary_sensor")
+    binary_sensor.BinarySensorEntity = FakeEntity
+    binary_sensor.BinarySensorDeviceClass = SimpleNamespace(CONNECTIVITY="connectivity")
+
+    exceptions = types.ModuleType("homeassistant.exceptions")
+    class ConfigEntryNotReady(Exception):
+        pass
+    exceptions.ConfigEntryNotReady = ConfigEntryNotReady
 
     aiohttp_client = types.ModuleType("homeassistant.helpers.aiohttp_client")
     aiohttp_client.async_get_clientsession = lambda hass: hass._session
@@ -370,6 +635,8 @@ def install_stubs():
     helpers.aiohttp_client = aiohttp_client
     helpers.chat_session = chat_session
     helpers.selector = selector
+    helpers.entity = entity
+    helpers.update_coordinator = update_coordinator
 
     aiohttp = types.ModuleType("aiohttp")
     aiohttp.ClientTimeout = FakeClientTimeout
@@ -389,8 +656,11 @@ def install_stubs():
     sys.modules["homeassistant.const"] = const
     sys.modules["homeassistant.core"] = core
     sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
+    sys.modules["homeassistant.exceptions"] = exceptions
     sys.modules["homeassistant.components.conversation"] = conversation
     sys.modules["homeassistant.components.homeassistant.exposed_entities"] = exposed
+    sys.modules["homeassistant.components.sensor"] = sensor
+    sys.modules["homeassistant.components.binary_sensor"] = binary_sensor
     sys.modules["homeassistant.helpers"] = helpers
     sys.modules["homeassistant.helpers.intent"] = intent
     sys.modules["homeassistant.helpers.template"] = template
@@ -400,6 +670,8 @@ def install_stubs():
     sys.modules["homeassistant.helpers.aiohttp_client"] = aiohttp_client
     sys.modules["homeassistant.helpers.chat_session"] = chat_session
     sys.modules["homeassistant.helpers.selector"] = selector
+    sys.modules["homeassistant.helpers.entity"] = entity
+    sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator
     sys.modules["aiohttp"] = aiohttp
     sys.modules["voluptuous"] = voluptuous
 
