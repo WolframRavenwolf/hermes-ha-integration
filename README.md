@@ -75,7 +75,7 @@ After setup, all settings can be changed via **Settings → Devices & Services �
 | API Key                                  | (empty)             | Add-on Access Password, or the selected native profile's own API key                   |
 | Use HTTPS                                | Yes                 | Connect via HTTPS                                                                      |
 | Verify SSL certificate                   | No                  | Verify the SSL certificate (disable for self-signed)                                   |
-| System Prompt                            | (built-in)          | Jinja2 template — leave empty to use Hermes Agent's own prompt                         |
+| System Prompt                            | (built-in)          | Jinja2 template; empty omits custom context, but speech-format guidance still applies                         |
 | Include exposed entities                 | No                  | Include smart home device states in the system prompt                                  |
 | Max context characters                   | 12000               | Character limit for the entity context block                                           |
 | Follow-up listening                      | Off                 | Off, always on, or automatic only when Hermes asks a follow-up question                 |
@@ -110,6 +110,16 @@ This separates Home Assistant's continued-conversation UX from Hermes's backend 
 
 Use **Follow-up listening: Auto when Hermes asks a question** if you want Assist
 to reopen only when Hermes ends with a direct question.
+
+Replies are requested as plain, speakable text in every mode, including with an
+empty custom system prompt. Emoji are removed before streamed or final speech
+reaches TTS and before Auto follow-up is evaluated. Meaningful units, percentages,
+currencies, and mathematical symbols are preserved; dual-use symbols such as
+arrows are removed only when explicitly presented as emoji.
+
+Auto asks Hermes to put one direct question last, with nothing after the question
+mark. It still checks the final sentence, not earlier quoted questions or
+language-specific phrases such as "Tell me what time."
 
 ## How It Works
 
