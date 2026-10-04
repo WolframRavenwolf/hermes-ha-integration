@@ -326,6 +326,30 @@ async def test_loss_recovery_retains_utc_timestamp(
     assert recovered >= first
 
 
+async def test_healthy_polls_keep_timestamp_without_state_changed_events(
+    hass_ready: HomeAssistant, hermes_api: HermesLoopbackApi, freezer
+) -> None:
+    hass = hass_ready
+    entry = await _setup(hass, _entry(hermes_api, entry_id="stable-timestamp"))
+    ids = _ids(hass, entry.entry_id)
+    entity_id = ids["last_successful_connection"]
+    first = _state(hass, entity_id).state
+    events = []
+    remove_listener = hass.bus.async_listen(
+        "state_changed",
+        lambda event: events.append(event) if event.data["entity_id"] == entity_id else None,
+    )
+    try:
+        freezer.move_to(dt_util.utcnow() + timedelta(seconds=20))
+        hermes_api.root.detailed = DETAILED_DEGRADED
+        await _refresh_poll(hass, ids["health"])
+        assert _state(hass, ids["health"]).state == "degraded"
+        assert _state(hass, entity_id).state == first
+        assert events == []
+    finally:
+        remove_listener()
+
+
 async def test_degraded_and_malformed_and_unsupported_detailed(
     hass_ready: HomeAssistant, hermes_api: HermesLoopbackApi
 ) -> None:

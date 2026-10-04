@@ -131,7 +131,7 @@ Each config entry creates one Home Assistant device that groups the conversation
 | `binary_sensor.hermes_agent_api_connectivity` | Authenticated reachability of the selected route. On means the existing connection probe succeeded (`/v1/health` identity plus authenticated `/v1/models`). Off means the API is currently unreachable or unauthorized. This is **not** provider/model readiness. |
 | `sensor.hermes_agent_health` | Optional authenticated `/health/detailed` status: `ok` or `degraded`. HTTP 200 can still be `degraded`. Unavailable when the endpoint is absent, uses an unsupported method, redirects, returns malformed JSON/status, or otherwise cannot be interpreted. Public `/health` success is not authentication. |
 | `sensor.hermes_agent_api_latency` | Duration of the authenticated connection probe in milliseconds. This is not model or chat latency. Unavailable while connectivity is off. |
-| `sensor.hermes_agent_last_successful_connection` | UTC timestamp of the last successful authenticated connection. The previous value is preserved while the API is offline. Unavailable until the first success. |
+| `sensor.hermes_agent_last_successful_connection` | UTC timestamp of the initial successful authenticated connection or the first success after an offline period. Healthy polls keep the same timestamp while connectivity, health, and latency continue to update. The previous value is preserved while the API is offline. Unavailable until the first success. |
 
 Entity IDs follow the config-entry title. The examples above use the default title `Hermes Agent`. A second entry titled `Worker` would use names such as `binary_sensor.worker_api_connectivity`.
 

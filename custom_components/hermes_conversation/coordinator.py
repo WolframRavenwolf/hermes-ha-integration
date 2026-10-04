@@ -100,11 +100,21 @@ class HermesDiagnosticsCoordinator(DataUpdateCoordinator[HermesDiagnosticsData])
             _LOGGER.debug("Hermes diagnostics connection failed: %s", ERROR_CATEGORY_AUTH)
             return _offline(previous, ERROR_CATEGORY_AUTH)
 
+        last_successful_connection = (
+            previous.last_successful_connection if previous else None
+        )
+        if (
+            last_successful_connection is None
+            or not previous.connected
+            or not self.last_update_success
+        ):
+            last_successful_connection = datetime.now(timezone.utc)
+
         return HermesDiagnosticsData(
             connected=True,
             health_available=detailed.available,
             health_status=detailed.status if detailed.available else None,
             latency_ms=latency_ms,
-            last_successful_connection=datetime.now(timezone.utc),
+            last_successful_connection=last_successful_connection,
             error_category=None if detailed.available else detailed.error_category,
         )

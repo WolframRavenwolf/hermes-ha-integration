@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -625,6 +625,79 @@ class DiagnosticsCoordinatorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(coordinator.data.health_available)
         self.assertEqual(coordinator.data.last_successful_connection, stamp)
 
+    async def test_healthy_polls_preserve_connection_timestamp_and_update_diagnostics(self):
+        first = datetime(2026, 10, 4, 10, 0, tzinfo=timezone.utc)
+        later = datetime(2026, 10, 4, 10, 1, tzinfo=timezone.utc)
+        session = FakeSession(
+            [
+                _health_ok(), _models_ok(), _detailed_ok(),
+                _health_ok(), _models_ok(), _detailed_ok(status="degraded"),
+                _health_ok(), _models_ok(), FakeResponse(status=404),
+            ]
+        )
+        with mock.patch(
+            "custom_components.hermes_conversation.coordinator.datetime"
+        ) as clock, mock.patch(
+            "custom_components.hermes_conversation.coordinator.time"
+        ) as timer:
+            clock.now.side_effect = [first, later, later]
+            timer.monotonic.side_effect = [10, 10.01, 20, 20.06, 30, 30.09]
+            coordinator = await _refresh(FakeHass(), _entry(), _client(session))
+            self.assertEqual(coordinator.data.last_successful_connection, first)
+            self.assertEqual(coordinator.data.latency_ms, 10)
+
+            await coordinator.async_refresh()
+            self.assertTrue(coordinator.data.connected)
+            self.assertTrue(coordinator.data.health_available)
+            self.assertEqual(coordinator.data.health_status, "degraded")
+            self.assertEqual(coordinator.data.latency_ms, 60)
+            self.assertEqual(coordinator.data.last_successful_connection, first)
+
+            await coordinator.async_refresh()
+            self.assertTrue(coordinator.data.connected)
+            self.assertFalse(coordinator.data.health_available)
+            self.assertIsNone(coordinator.data.health_status)
+            self.assertEqual(coordinator.data.error_category, "unsupported")
+            self.assertEqual(coordinator.data.latency_ms, 90)
+            self.assertEqual(coordinator.data.last_successful_connection, first)
+        self.assertEqual(len(session.calls), 9)
+
+    async def test_first_success_after_offline_restamps_connection_timestamp(self):
+        first = datetime(2026, 10, 4, 10, 0, tzinfo=timezone.utc)
+        recovered = datetime(2026, 10, 4, 10, 2, tzinfo=timezone.utc)
+        later = datetime(2026, 10, 4, 10, 3, tzinfo=timezone.utc)
+        session = FakeSession(
+            [
+                _health_ok(), _models_ok(), _detailed_ok(),
+                FakeResponse(status=500),
+                _health_ok(), _models_ok(), _detailed_ok(status="degraded"),
+                _health_ok(), _models_ok(), _detailed_ok(),
+            ]
+        )
+        with mock.patch(
+            "custom_components.hermes_conversation.coordinator.datetime"
+        ) as clock:
+            clock.now.side_effect = [first, recovered, later]
+            coordinator = await _refresh(FakeHass(), _entry(), _client(session))
+            self.assertEqual(coordinator.data.last_successful_connection, first)
+
+            await coordinator.async_refresh()
+            self.assertFalse(coordinator.data.connected)
+            self.assertEqual(coordinator.data.last_successful_connection, first)
+            # The coordinator returned offline data, so HA still marks its refresh successful.
+            self.assertTrue(coordinator.last_update_success)
+
+            await coordinator.async_refresh()
+            self.assertTrue(coordinator.data.connected)
+            self.assertEqual(coordinator.data.health_status, "degraded")
+            self.assertEqual(coordinator.data.last_successful_connection, recovered)
+
+            await coordinator.async_refresh()
+            self.assertTrue(coordinator.data.connected)
+            self.assertEqual(coordinator.data.health_status, "ok")
+            self.assertEqual(coordinator.data.last_successful_connection, recovered)
+        self.assertEqual(len(session.calls), 10)
+
     async def test_entities_expose_diagnostic_category_and_shared_device(self):
         from homeassistant.helpers.entity import EntityCategory
 
@@ -841,7 +914,7 @@ class DiagnosticsContractTests(unittest.TestCase):
             (REPO_ROOT / "custom_components/hermes_conversation/manifest.json").read_text()
         )
         self.assertEqual(manifest["iot_class"], "local_polling")
-        self.assertEqual(manifest["version"], "1.3.0")
+        self.assertEqual(manifest["version"], "1.3.1")
 
     def test_hacs_metadata_matches_diagnostic_platforms(self):
         hacs = json.loads((REPO_ROOT / "hacs.json").read_text())

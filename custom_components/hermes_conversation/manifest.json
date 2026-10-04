@@ -9,5 +9,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/WolframRavenwolf/hermes-ha-integration/issues",
   "requirements": [],
-  "version": "1.3.0"
+  "version": "1.3.1"
 }
