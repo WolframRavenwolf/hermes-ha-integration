@@ -121,7 +121,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/models",
             ],
@@ -405,7 +405,7 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/models",
             ],
@@ -846,9 +846,9 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PublicationMetadataTests(unittest.TestCase):
-    def test_manifest_is_version_1_4_1(self):
+    def test_manifest_is_version_1_4_2(self):
         manifest = json.loads((COMPONENT_ROOT / "manifest.json").read_text())
-        self.assertEqual(manifest["version"], "1.4.1")
+        self.assertEqual(manifest["version"], "1.4.2")
 
     def test_strings_and_english_translation_are_equivalent(self):
         strings = json.loads((COMPONENT_ROOT / "strings.json").read_text())
@@ -898,7 +898,7 @@ class PublicationMetadataTests(unittest.TestCase):
         self.assertIn("/profile/<name>", lowered)
         self.assertIn("/p/<name>", lowered)
         self.assertIn("each profile's own api key", lowered)
-        self.assertIn("reserved native profile", lowered)
+        self.assertIn("impossible native profile id", lowered)
         self.assertIn("must return `404`", lowered)
         self.assertIn("before every credentialed request", lowered)
         self.assertIn("selected native route must return `200`", lowered)

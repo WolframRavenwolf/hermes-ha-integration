@@ -33,7 +33,9 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_NATIVE_ROUTE_CANARY_PROFILE = "hermes"
+# Native profile IDs must start with a letter or digit. This cannot name a
+# real profile or alias the default profile through its "hermes" handle.
+_NATIVE_ROUTE_CANARY_PROFILE = "_"
 
 
 class HermesApiError(Exception):

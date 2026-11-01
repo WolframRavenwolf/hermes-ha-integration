@@ -240,10 +240,10 @@ class DiagnosticsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/models",
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/health/detailed",
             ],
@@ -272,7 +272,7 @@ class DiagnosticsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(coordinator.data.connected)
         self.assertEqual(
             [call["url"] for call in session.calls],
-            ["https://agent.local:8443/p/hermes/v1/health"],
+            ["https://agent.local:8443/p/_/v1/health"],
         )
         self.assertEqual(session.calls[0]["headers"], {})
         self.assertFalse(coordinator.data.health_available)
@@ -289,7 +289,7 @@ class DiagnosticsApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [call["url"] for call in session.calls],
-            ["https://agent.local:8443/p/hermes/v1/health"],
+            ["https://agent.local:8443/p/_/v1/health"],
         )
         self.assertEqual(session.calls[0]["headers"], {})
         self.assertEqual(len(session.responses), 1)
@@ -307,7 +307,7 @@ class DiagnosticsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker/v1/health",
                 "https://agent.local:8443/p/worker/health/detailed",
             ],
@@ -342,10 +342,10 @@ class DiagnosticsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker/v1/health",
                 "https://agent.local:8443/p/worker/v1/models",
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
             ],
         )
         self.assertEqual(session.calls[3]["headers"], {})
@@ -384,10 +384,10 @@ class DiagnosticsApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     [call["url"] for call in session.calls],
                     [
-                        "https://agent.local:8443/p/hermes/v1/health",
+                        "https://agent.local:8443/p/_/v1/health",
                         "https://agent.local:8443/p/worker/v1/health",
                         "https://agent.local:8443/p/worker/v1/models",
-                        "https://agent.local:8443/p/hermes/v1/health",
+                        "https://agent.local:8443/p/_/v1/health",
                         "https://agent.local:8443/p/worker/v1/health",
                         "https://agent.local:8443/p/worker/health/detailed",
                     ],
@@ -930,7 +930,7 @@ class DiagnosticsContractTests(unittest.TestCase):
             (REPO_ROOT / "custom_components/hermes_conversation/manifest.json").read_text()
         )
         self.assertEqual(manifest["iot_class"], "local_polling")
-        self.assertEqual(manifest["version"], "1.4.1")
+        self.assertEqual(manifest["version"], "1.4.2")
 
     def test_hacs_metadata_matches_diagnostic_platforms(self):
         hacs = json.loads((REPO_ROOT / "hacs.json").read_text())

@@ -425,7 +425,7 @@ async def test_native_profile_uses_canary_and_registers(
     ids = _ids(hass, entry.entry_id)
     assert _state(hass, ids["api_connectivity"]).state == STATE_ON
     assert _state(hass, ids["health"]).state == "ok"
-    assert "/p/hermes/v1/health" in hermes_api.request_paths()
+    assert "/p/_/v1/health" in hermes_api.request_paths()
     assert "/p/worker-bot/v1/health" in hermes_api.request_paths()
     assert "/p/worker-bot/v1/models" in hermes_api.request_paths()
     assert "/p/worker-bot/health/detailed" in hermes_api.request_paths()
@@ -473,7 +473,7 @@ async def test_rejected_credentials_and_profile_guard_are_fail_closed(
     # The time jump can fire a scheduled poll as well as update_entity.
     blocked = hermes_api.requests[before:]
     assert blocked
-    assert all(request.path == "/p/hermes/v1/health" for request in blocked)
+    assert all(request.path == "/p/_/v1/health" for request in blocked)
     assert all(request.authorization is None for request in blocked)
 
 

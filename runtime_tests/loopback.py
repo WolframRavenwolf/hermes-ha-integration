@@ -178,8 +178,8 @@ class HermesLoopbackApi:
 
     def _bundle_for(self, path: str) -> tuple[RouteBundle | None, str, bool]:
         """Return (bundle, remainder, is_native_canary)."""
-        if path == "/p/hermes/v1/health" or path.startswith("/p/hermes/"):
-            return None, path[len("/p/hermes") :], True
+        if path == "/p/_/v1/health" or path.startswith("/p/_/"):
+            return None, path[len("/p/_") :], True
         if path.startswith("/p/"):
             rest = path[3:]
             name, _, remainder = rest.partition("/")
