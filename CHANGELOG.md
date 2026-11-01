@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.2] - 2026-11-01
+
+### Fixed
+
+- Validate native profile routing with an impossible profile ID instead of `hermes`, which newer gateways may use as the default profile's handle. Correct native connections now pass validation while credential-free checks still block gateways that ignore the profile prefix. Thanks to @dtk1985 for #23.
+
 ## [1.4.1] - 2026-10-24
 
 ### Fixed

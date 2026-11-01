@@ -4,6 +4,7 @@ import asyncio
 import json
 import unittest
 from typing import Any
+from urllib.parse import urlsplit
 
 from tests.test_support import FakeClientError, FakeClientTimeout
 from custom_components.hermes_conversation.api import (
@@ -12,6 +13,7 @@ from custom_components.hermes_conversation.api import (
     HermesAuthError,
     HermesConnectionError,
     HermesStreamSetupError,
+    _NATIVE_ROUTE_CANARY_PROFILE,
 )
 
 
@@ -79,6 +81,41 @@ class FakeSession:
         return self.responses.pop(0)
 
 
+class NativeRoutingSession(FakeSession):
+    """Resolve health by profile, including the default handle and a real user ID."""
+
+    def __init__(self, *, default_handle_alias):
+        super().__init__([])
+        self.default_handle_alias = default_handle_alias
+
+    def get(self, url, **kwargs):
+        path = urlsplit(url).path
+        profile = path.split("/")[2]
+        if path.endswith("/v1/health"):
+            exists = profile in {"default", "worker", "hermes-route-canary-nonexistent"}
+            exists = exists or (self.default_handle_alias and profile == "hermes")
+            response = FakeResponse(
+                status=200 if exists else 404,
+                json_data={"status": "ok", "platform": "hermes-agent"},
+            )
+        elif path.endswith("/v1/models"):
+            response = FakeResponse(json_data={"data": [{"id": "worker"}]})
+        else:
+            response = FakeResponse(json_data={"status": "ok"})
+        self.responses.append(response)
+        return super().get(url, **kwargs)
+
+    def post(self, url, **kwargs):
+        self.responses.append(FakeResponse(
+            json_data={"choices": [{"message": {"content": "ok"}}]},
+            chunks=[
+                'data: {"choices": [{"delta": {"content": "ok"}}]}\n\n',
+                "data: [DONE]\n\n",
+            ],
+        ))
+        return super().post(url, **kwargs)
+
+
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _health_response():
@@ -120,6 +157,40 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             {"Authorization": "Bearer wrong-key"},
         )
 
+    def test_native_canary_cannot_be_a_real_profile_id(self):
+        self.assertNotRegex(
+            _NATIVE_ROUTE_CANARY_PROFILE, r"^[a-z0-9][a-z0-9_-]{0,63}$"
+        )
+
+    async def test_native_requests_accept_default_handle_alias(self):
+        for alias in (False, True):
+            for profile in ("worker", "default"):
+                for operation in ("connection", "models", "detailed", "chat", "stream"):
+                    with self.subTest(alias=alias, profile=profile, operation=operation):
+                        session = NativeRoutingSession(default_handle_alias=alias)
+                        client = HermesApiClient(
+                            session, "agent.local", 8443, api_key="profile-key",
+                            profile=profile, profile_route="native",
+                        )
+                        if operation == "connection":
+                            self.assertTrue(await client.async_check_connection())
+                        elif operation == "models":
+                            self.assertEqual(await client.async_get_models(), [{"id": "worker"}])
+                        elif operation == "detailed":
+                            self.assertTrue((await client.async_get_detailed_health()).available)
+                        elif operation == "chat":
+                            self.assertEqual((await client.async_send_message([])).text, "ok")
+                        else:
+                            self.assertEqual([p async for p in client.async_stream_message([])], ["ok"])
+
+                        self.assertEqual(len(session.calls), 3)
+                        self.assertEqual(session.calls[0]["headers"], {})
+                        self.assertEqual(session.calls[1]["headers"], {})
+                        self.assertFalse(session.calls[0]["allow_redirects"])
+                        self.assertFalse(session.calls[1]["allow_redirects"])
+                        self.assertEqual(session.calls[1]["url"], f"{client.base_url}/v1/health")
+                        self.assertEqual(session.calls[2]["headers"]["Authorization"], "Bearer profile-key")
+
     async def test_native_probe_rejects_non_fail_closed_routing_before_credentials(self):
         for profile in ("worker", "default"):
             with self.subTest(profile=profile):
@@ -143,7 +214,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(
                     [call["url"] for call in session.calls],
-                    ["https://agent.local:8443/p/hermes/v1/health"],
+                    ["https://agent.local:8443/p/_/v1/health"],
                 )
                 self.assertEqual(session.calls[0]["headers"], {})
                 self.assertFalse(session.calls[0]["allow_redirects"])
@@ -212,7 +283,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker/v1/health",
             ],
         )
@@ -246,7 +317,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(
                     [call["url"] for call in session.calls],
-                    ["https://agent.local:8443/p/hermes/v1/health"],
+                    ["https://agent.local:8443/p/_/v1/health"],
                 )
                 self.assertEqual(session.calls[0]["headers"], {})
                 self.assertFalse(session.calls[0]["allow_redirects"])
@@ -478,16 +549,16 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/models",
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/models",
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/chat/completions",
-                "https://agent.local:8443/p/hermes/v1/health",
+                "https://agent.local:8443/p/_/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/health",
                 "https://agent.local:8443/p/worker-bot/v1/chat/completions",
             ],
