@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 import time
@@ -68,6 +69,14 @@ except ImportError:
     ChatLog = Any
     async_get_chat_log = None
     async_get_chat_session = None
+
+# Keep the previous context=None behavior without passing a new keyword to old HA.
+_CHAT_SESSION_KWARGS = (
+    {"context": None}
+    if async_get_chat_session is not None
+    and "context" in inspect.signature(async_get_chat_session).parameters
+    else {}
+)
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_CACHED_CONVERSATIONS = 50
@@ -383,6 +392,7 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
                     async_get_chat_session(
                         self.hass,
                         user_input.conversation_id,
+                        **_CHAT_SESSION_KWARGS,
                     ) as session,
                     async_get_chat_log(
                         self.hass,

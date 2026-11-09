@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import time
 import unittest
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest import mock
 
@@ -76,6 +78,72 @@ class FakeClient:
 
 
 class ConversationTests(unittest.IsolatedAsyncioTestCase):
+    async def _process_with_chat_session(self, session_factory):
+        spec = importlib.util.spec_from_file_location(
+            "custom_components.hermes_conversation._context_test",
+            conversation_module.__file__,
+        )
+        module = importlib.util.module_from_spec(spec)
+        with mock.patch(
+            "homeassistant.helpers.chat_session.async_get_chat_session",
+            session_factory,
+        ):
+            spec.loader.exec_module(module)
+        agent = module.HermesConversationAgent(
+            FakeHass(),
+            FakeConfigEntry(options={CONF_PROMPT: ""}),
+            FakeClient(),
+            session_map={},
+        )
+        return await agent.async_process(
+            FakeConversationInput(
+                "hello", conversation_id="context-test", context=object()
+            )
+        )
+
+    async def test_chat_session_explicit_none_avoids_deprecation(self):
+        omitted = object()
+        seen = []
+
+        @contextmanager
+        def chat_session(hass, conversation_id, *, context=omitted):
+            seen.append(context)
+            yield SimpleNamespace(
+                conversation_id=conversation_id, async_on_cleanup=lambda callback: None
+            )
+
+        result = await self._process_with_chat_session(chat_session)
+        self.assertEqual(seen, [None])
+        self.assertIsNone(result.response.error)
+
+    async def test_chat_session_supports_required_context(self):
+        seen = []
+
+        @contextmanager
+        def chat_session(hass, conversation_id, *, context):
+            seen.append(context)
+            yield SimpleNamespace(
+                conversation_id=conversation_id, async_on_cleanup=lambda callback: None
+            )
+
+        result = await self._process_with_chat_session(chat_session)
+        self.assertEqual(seen, [None])
+        self.assertIsNone(result.response.error)
+
+    async def test_chat_session_keeps_legacy_signature(self):
+        seen = []
+
+        @contextmanager
+        def chat_session(hass, conversation_id):
+            seen.append(conversation_id)
+            yield SimpleNamespace(
+                conversation_id=conversation_id, async_on_cleanup=lambda callback: None
+            )
+
+        result = await self._process_with_chat_session(chat_session)
+        self.assertEqual(seen, ["context-test"])
+        self.assertIsNone(result.response.error)
+
     async def test_same_device_new_conversation_reuses_session(self):
         entry = FakeConfigEntry(
             data={CONF_API_KEY: "secret"},
