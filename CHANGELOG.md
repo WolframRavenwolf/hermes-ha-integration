@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.3] - 2026-11-09
+
+### Fixed
+
+- Pass an explicit chat-session context on Home Assistant versions that support it, removing the 2026.11 deprecation warning and supporting the announced 2027.5 requirement. Preserve the previous `None` behavior and compatibility with older Home Assistant signatures. Thanks to @karmateam5555 for #25.
+
 ## [1.4.2] - 2026-11-01
 
 ### Fixed

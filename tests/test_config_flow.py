@@ -846,9 +846,9 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PublicationMetadataTests(unittest.TestCase):
-    def test_manifest_is_version_1_4_2(self):
+    def test_manifest_is_version_1_4_3(self):
         manifest = json.loads((COMPONENT_ROOT / "manifest.json").read_text())
-        self.assertEqual(manifest["version"], "1.4.2")
+        self.assertEqual(manifest["version"], "1.4.3")
 
     def test_strings_and_english_translation_are_equivalent(self):
         strings = json.loads((COMPONENT_ROOT / "strings.json").read_text())

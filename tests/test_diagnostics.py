@@ -930,7 +930,7 @@ class DiagnosticsContractTests(unittest.TestCase):
             (REPO_ROOT / "custom_components/hermes_conversation/manifest.json").read_text()
         )
         self.assertEqual(manifest["iot_class"], "local_polling")
-        self.assertEqual(manifest["version"], "1.4.2")
+        self.assertEqual(manifest["version"], "1.4.3")
 
     def test_hacs_metadata_matches_diagnostic_platforms(self):
         hacs = json.loads((REPO_ROOT / "hacs.json").read_text())
