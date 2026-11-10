@@ -96,6 +96,20 @@ _PROFILE_ROUTE_OPTIONS = [
 ]
 
 
+def _range_including(current: object, minimum: int, maximum: int) -> tuple[int, int]:
+    """Widen a form range so an already-stored value stays valid.
+
+    Entries that set the legacy ``timeout`` key before these options existed may hold
+    a value outside the range offered to new users; editing an unrelated option must
+    not force them to change a setting that works.
+    """
+    try:
+        value = int(current)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return minimum, maximum
+    return min(minimum, value), max(maximum, value)
+
+
 def _entry_title(profile: str) -> str:
     """Return a title that distinguishes non-primary profiles."""
     return f"Hermes Agent ({profile})" if profile else "Hermes Agent"
@@ -493,6 +507,15 @@ class HermesConversationOptionsFlow(OptionsFlow):
                     return self.async_create_entry(title="", data=None)
 
         connection = resolve_connection_config(self.config_entry)
+        request_timeout = entry_value(
+            self.config_entry,
+            CONF_REQUEST_TIMEOUT_SECONDS,
+            DEFAULT_TIMEOUT,
+            legacy_keys=(LEGACY_CONF_TIMEOUT,),
+        )
+        request_timeout_min, request_timeout_max = _range_including(
+            request_timeout, 10, 3600
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -571,13 +594,11 @@ class HermesConversationOptionsFlow(OptionsFlow):
                     ): bool,
                     vol.Optional(
                         CONF_REQUEST_TIMEOUT_SECONDS,
-                        default=entry_value(
-                            self.config_entry,
-                            CONF_REQUEST_TIMEOUT_SECONDS,
-                            DEFAULT_TIMEOUT,
-                            legacy_keys=(LEGACY_CONF_TIMEOUT,),
-                        ),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=3600)),
+                        default=request_timeout,
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=request_timeout_min, max=request_timeout_max),
+                    ),
                     vol.Optional(
                         CONF_STREAM_TIMEOUT_SECONDS,
                         default=entry_value(

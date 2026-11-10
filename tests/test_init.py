@@ -136,10 +136,6 @@ class InitTests(unittest.IsolatedAsyncioTestCase):
             [(entry.entry_id, ("conversation", "sensor", "binary_sensor"))],
         )
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     async def _client_for(self, options=None, data_extra=None):
         hass = FakeHass()
         entry = FakeConfigEntry(
@@ -191,3 +187,7 @@ if __name__ == "__main__":
         )
 
         self.assertEqual(client._stream_timeout, 600)
+
+
+if __name__ == "__main__":
+    unittest.main()
