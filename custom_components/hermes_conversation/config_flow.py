@@ -49,7 +49,9 @@ from .const import (
     CONF_PROFILE,
     CONF_PROFILE_ROUTE,
     CONF_PROMPT,
+    CONF_REQUEST_TIMEOUT_SECONDS,
     CONF_SESSION_TIMEOUT_SECONDS,
+    CONF_STREAM_TIMEOUT_SECONDS,
     CONF_USE_SSL,
     CONF_VERIFY_SSL,
     DEFAULT_ALWAYS_SPEAK_FALLBACK,
@@ -62,11 +64,14 @@ from .const import (
     DEFAULT_PROFILE_ROUTE,
     DEFAULT_PROMPT,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
+    DEFAULT_STREAM_TIMEOUT,
+    DEFAULT_TIMEOUT,
     DOMAIN,
     FOLLOW_UP_MODE_ALWAYS,
     FOLLOW_UP_MODE_AUTO,
     FOLLOW_UP_MODE_OFF,
     LEGACY_CONF_INSTRUCTIONS,
+    LEGACY_CONF_TIMEOUT,
     ProfileRouteFamily,
 )
 
@@ -564,6 +569,23 @@ class HermesConversationOptionsFlow(OptionsFlow):
                             DEFAULT_ENABLE_SESSION_REUSE,
                         ),
                     ): bool,
+                    vol.Optional(
+                        CONF_REQUEST_TIMEOUT_SECONDS,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_REQUEST_TIMEOUT_SECONDS,
+                            DEFAULT_TIMEOUT,
+                            legacy_keys=(LEGACY_CONF_TIMEOUT,),
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=3600)),
+                    vol.Optional(
+                        CONF_STREAM_TIMEOUT_SECONDS,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_STREAM_TIMEOUT_SECONDS,
+                            DEFAULT_STREAM_TIMEOUT,
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=7200)),
                     vol.Optional(
                         CONF_SESSION_TIMEOUT_SECONDS,
                         default=entry_value(
