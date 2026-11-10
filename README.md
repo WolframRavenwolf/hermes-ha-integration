@@ -82,6 +82,8 @@ After setup, all settings can be changed via **Settings â†’ Devices & Services â
 | Max context characters                   | 12000               | Character limit for the entity context block                                           |
 | Follow-up listening                      | Off                 | Off, always on, or automatic only when Hermes asks a follow-up question                 |
 | Reuse Hermes server sessions             | Yes                 | Preserve short-term context across fresh wake-word turns via `X-Hermes-Session-Id`     |
+| Request timeout (seconds)                | 120                 | Non-streaming calls: whole-request limit. Streamed replies: longest silence allowed between chunks (10-3600) |
+| Streaming reply time limit (seconds)     | 300                 | Hard limit on the total time of one streamed reply, never below the request timeout (10-7200) |
 | Voice session reuse timeout (seconds)    | 900                 | Idle timeout before a remembered voice session expires                                 |
 | Include device/satellite context         | Yes                 | Append voice-origin device/area/satellite metadata to the prompt                       |
 | Always speak replies through fallback    | No                  | Also send voice replies through a fallback `tts.speak` target for device-origin turns  |
