@@ -1,10 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [1.4.4] - 2026-11-18
 
 ### Added
 
 - Make the Hermes request timeout and the streamed-reply time limit configurable from **Configure** (previously fixed at 120 s and 300 s, so slow reasoning models or long tool runs failed with a timeout and no way to raise it). An existing legacy `timeout` entry value is still honoured as the request timeout until the new option is set.
+
+### Verification
+
+- 227 unit tests passed with Home Assistant stubs, including configured/default timeout propagation, legacy values and streaming-limit clamping. No live Home Assistant runtime test was performed.
 
 ## [1.4.3] - 2026-11-09
 
