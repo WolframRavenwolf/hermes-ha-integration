@@ -21,9 +21,12 @@ from custom_components.hermes_conversation.const import (
     CONF_PORT,
     CONF_PROFILE,
     CONF_PROMPT,
+    CONF_REQUEST_TIMEOUT_SECONDS,
+    CONF_STREAM_TIMEOUT_SECONDS,
     CONF_USE_SSL,
     CONF_VERIFY_SSL,
     LEGACY_CONF_API_BASE_URL,
+    LEGACY_CONF_TIMEOUT,
 )
 
 
@@ -376,6 +379,44 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
             [option["value"] for option in selector["options"]],
             ["addon", "native"],
         )
+
+    async def test_options_form_offers_timeouts(self):
+        entry = FakeConfigEntry(data=connection_input(), options={})
+        flow = self.make_flow(entry)
+
+        result = await flow.async_step_init()
+
+        self.assertIn(CONF_REQUEST_TIMEOUT_SECONDS, result["data_schema"])
+        self.assertIn(CONF_STREAM_TIMEOUT_SECONDS, result["data_schema"])
+
+    async def test_options_form_keeps_out_of_range_legacy_timeout_valid(self):
+        for legacy, expected in ((5, (5, 3600)), (7200, (10, 7200)), (120, (10, 3600))):
+            with self.subTest(legacy=legacy):
+                entry = FakeConfigEntry(
+                    data={**connection_input(), LEGACY_CONF_TIMEOUT: legacy},
+                    options={},
+                )
+                flow = self.make_flow(entry)
+
+                result = await flow.async_step_init()
+
+                # The voluptuous stub records vol.All(*validators) as (validators, kwargs).
+                validators, _ = result["data_schema"][CONF_REQUEST_TIMEOUT_SECONDS]
+                bounds = validators[1]
+                self.assertEqual((bounds["min"], bounds["max"]), expected)
+
+    async def test_options_persists_timeouts_as_options(self):
+        entry = FakeConfigEntry(data=connection_input(), options={})
+        flow = self.make_flow(entry)
+
+        result = await flow.async_step_init(
+            {CONF_REQUEST_TIMEOUT_SECONDS: 400, CONF_STREAM_TIMEOUT_SECONDS: 900}
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(entry.options[CONF_REQUEST_TIMEOUT_SECONDS], 400)
+        self.assertEqual(entry.options[CONF_STREAM_TIMEOUT_SECONDS], 900)
+        self.assertNotIn(CONF_REQUEST_TIMEOUT_SECONDS, entry.data)
 
     async def test_options_persists_native_route_and_probes_only_selected_path(self):
         entry = FakeConfigEntry(

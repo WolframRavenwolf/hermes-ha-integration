@@ -98,6 +98,8 @@
           "context_max_chars": "Max context characters",
           "continued_conversation_mode": "Follow-up listening",
           "enable_session_reuse": "Reuse Hermes server sessions across short voice turns",
+          "request_timeout_seconds": "Request timeout (seconds)",
+          "stream_timeout_seconds": "Streaming reply time limit (seconds)",
           "session_timeout_seconds": "Voice session reuse timeout (seconds)",
           "expose_device_context": "Include device/satellite context in prompt",
           "always_speak_fallback": "Always speak replies through fallback TTS",
@@ -108,6 +110,8 @@
           "profile": "Optional route name. Add-on names use letters, numbers, and single underscores; native names follow Hermes lowercase profile IDs. Leave blank for the root API.",
           "profile_route": "Home Assistant add-on uses /profile/<name>; native Hermes multiplexer uses /p/<name>. A blank Profile always uses the root API.",
           "api_key": "API key. Native multiplexer routes require the selected profile's own API key.",
+          "request_timeout_seconds": "How long to wait for Hermes. For non-streaming calls this is the whole request; for streamed replies it is the longest silence allowed between chunks. Raise it for slow reasoning models or long tool runs.",
+          "stream_timeout_seconds": "Hard limit on the total time for one streamed reply, regardless of activity. Never lower than the request timeout.",
           "continued_conversation_mode": "Choose when Home Assistant keeps listening after a Hermes reply: never, always, or only when Hermes asks a follow-up question."
         }
       }
