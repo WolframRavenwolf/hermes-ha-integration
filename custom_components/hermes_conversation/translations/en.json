@@ -102,6 +102,7 @@
           "stream_timeout_seconds": "Streaming reply time limit (seconds)",
           "session_timeout_seconds": "Voice session reuse timeout (seconds)",
           "expose_device_context": "Include device/satellite context in prompt",
+          "speak_only_final_answer": "Speak only the final answer (drop pre-tool text)",
           "always_speak_fallback": "Always speak replies through fallback TTS",
           "fallback_media_player": "Fallback media player entity_id",
           "fallback_tts_engine": "Fallback TTS entity_id"
@@ -112,7 +113,8 @@
           "api_key": "API key. Native multiplexer routes require the selected profile's own API key.",
           "request_timeout_seconds": "How long to wait for Hermes. For non-streaming calls this is the whole request; for streamed replies it is the longest silence allowed between chunks. Raise it for slow reasoning models or long tool runs.",
           "stream_timeout_seconds": "Hard limit on the total time for one streamed reply, regardless of activity. Never lower than the request timeout.",
-          "continued_conversation_mode": "Choose when Home Assistant keeps listening after a Hermes reply: never, always, or only when Hermes asks a follow-up question."
+          "continued_conversation_mode": "Choose when Home Assistant keeps listening after a Hermes reply: never, always, or only when Hermes asks a follow-up question.",
+          "speak_only_final_answer": "Wait for the complete reply and discard text before Hermes tool-progress events. Disables incremental speech and text streaming. Requires Hermes tool_progress_events to remain enabled."
         }
       }
     }

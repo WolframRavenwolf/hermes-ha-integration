@@ -1,6 +1,6 @@
 """Intentional silence is a complete response, never streamed as speech."""
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 from tests.test_support import FakeConfigEntry, FakeConversationInput, FakeHass, FakeChatLog
 from tests.test_conversation import FakeClient
@@ -93,12 +93,21 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
                         )
                     agent._async_speak_fallback = AsyncMock()
                     state = {}
+                    chat_log = FakeChatLog('mention', 'Explain the marker')
                     result, failed = await agent._async_process_inner(
                         FakeConversationInput('Explain the marker'),
-                        chat_log=FakeChatLog('mention', 'Explain the marker'),
+                        chat_log=chat_log,
                         request_state=state,
                     )
                     self.assertFalse(failed)
-                    self.assertEqual(result.response.speech['plain']['speech'], 'NO_REPLY')
+                    # Streamed speech equals the chat-log text; fallback TTS stays clean.
+                    self.assertEqual(
+                        result.response.speech['plain']['speech'],
+                        chat_log.content[-1].content.strip(),
+                    )
+                    self.assertIn('NO_REPLY', result.response.speech['plain']['speech'])
+                    agent._async_speak_fallback.assert_awaited_once_with(
+                        'NO_REPLY', ANY
+                    )
                     self.assertTrue(result.continue_conversation)
                     self.assertIsNot(state.get('intentional_silence'), True)
