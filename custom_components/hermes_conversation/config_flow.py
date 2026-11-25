@@ -51,6 +51,7 @@ from .const import (
     CONF_PROMPT,
     CONF_REQUEST_TIMEOUT_SECONDS,
     CONF_SESSION_TIMEOUT_SECONDS,
+    CONF_SPEAK_ONLY_FINAL_ANSWER,
     CONF_STREAM_TIMEOUT_SECONDS,
     CONF_USE_SSL,
     CONF_VERIFY_SSL,
@@ -64,6 +65,7 @@ from .const import (
     DEFAULT_PROFILE_ROUTE,
     DEFAULT_PROMPT,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
+    DEFAULT_SPEAK_ONLY_FINAL_ANSWER,
     DEFAULT_STREAM_TIMEOUT,
     DEFAULT_TIMEOUT,
     DOMAIN,
@@ -621,6 +623,14 @@ class HermesConversationOptionsFlow(OptionsFlow):
                             self.config_entry,
                             CONF_EXPOSE_DEVICE_CONTEXT,
                             DEFAULT_EXPOSE_DEVICE_CONTEXT,
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_SPEAK_ONLY_FINAL_ANSWER,
+                        default=entry_value(
+                            self.config_entry,
+                            CONF_SPEAK_ONLY_FINAL_ANSWER,
+                            DEFAULT_SPEAK_ONLY_FINAL_ANSWER,
                         ),
                     ): bool,
                     vol.Optional(

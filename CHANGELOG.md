@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.4.5] - 2026-11-25
+
+### Fixed
+
+- Show streamed replies only once in the Assist text UI. The final response now reuses the streamed text (trimmed), so Home Assistant no longer appends a second copy when the integration's extra speech cleanup had changed punctuation spacing or formatting. History, follow-up detection, fallback TTS and non-streaming replies keep the existing cleanup. Thanks to @Smokyr for #29.
+
+### Added
+
+- Optional **Speak only the final answer (drop pre-tool text)** in **Configure**. When enabled, text Hermes writes before a tool call is discarded and only the answer after the last `hermes.tool.progress` event is spoken and shown, once the reply completes. This disables incremental streaming and needs Hermes' tool-progress events (on by default). Off by default. Thanks to @ds-sebastian for #27.
+
+### Verification
+
+- 237 unit tests passed with Home Assistant stubs, including exact final/streamed text agreement, partial failures, intentional silence and the new option's buffering and failure handling. No live Home Assistant runtime test was performed.
+
 ## [1.4.4] - 2026-11-18
 
 ### Added

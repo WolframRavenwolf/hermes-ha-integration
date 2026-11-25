@@ -44,6 +44,7 @@ from .const import (
     CONF_INCLUDE_EXPOSED_ENTITIES,
     CONF_PROMPT,
     CONF_SESSION_TIMEOUT_SECONDS,
+    CONF_SPEAK_ONLY_FINAL_ANSWER,
     DEFAULT_ALWAYS_SPEAK_FALLBACK,
     DEFAULT_CONTEXT_MAX_CHARS,
     DEFAULT_ENABLE_SESSION_REUSE,
@@ -54,6 +55,7 @@ from .const import (
     DEFAULT_MAX_HISTORY_MESSAGES,
     DEFAULT_PROMPT,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
+    DEFAULT_SPEAK_ONLY_FINAL_ANSWER,
     DOMAIN,
     FOLLOW_UP_MODE_ALWAYS,
     FOLLOW_UP_MODE_AUTO,
@@ -545,7 +547,11 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
             return self._build_conversation_result(
                 intent_response, conv_id, continue_conversation=False
             ), False
-        intent_response.async_set_speech(spoken_text)
+        # Assist appends a final response that differs (after trimming) from the
+        # streamed message. Reuse the streamed text; keep cleanup for history/follow-up.
+        intent_response.async_set_speech(
+            response_text.strip() if chat_log is not None else spoken_text
+        )
         await self._async_speak_fallback(spoken_text, user_input)
         continue_conversation = self._should_continue_conversation(
             follow_up_mode,
@@ -621,10 +627,15 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
         """Yield speech-safe assistant text chunks from Hermes streaming."""
         speech_filter = _UnsafeSpeechStreamFilter()
         stream_started = False
+        stream_options = {}
+        if entry_value(
+            self.entry, CONF_SPEAK_ONLY_FINAL_ANSWER, DEFAULT_SPEAK_ONLY_FINAL_ANSWER
+        ):
+            stream_options["final_answer_only"] = True
 
         try:
             async for chunk in self.client.async_stream_message(
-                messages, session_id=session_id
+                messages, session_id=session_id, **stream_options
             ):
                 stream_started = True
                 if safe_chunk := speech_filter.feed(chunk):

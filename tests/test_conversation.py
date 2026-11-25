@@ -623,7 +623,8 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
 
         speech = result.response.speech["plain"]["speech"]
         chat_text = hass.data["last_chat_log"].content[-1].content
-        self.assertEqual(speech, "Visible answer done")
+        self.assertEqual(speech, chat_text)
+        self.assertEqual(speech.split(), ["Visible", "answer", "done"])
         self.assertNotIn("secret", chat_text)
         self.assertNotIn("tool_call", chat_text)
         self.assertNotIn("terminal", chat_text)

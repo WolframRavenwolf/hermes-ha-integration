@@ -86,6 +86,7 @@ After setup, all settings can be changed via **Settings â†’ Devices & Services â
 | Streaming reply time limit (seconds)     | 300                 | Hard limit on the total time of one streamed reply, never below the request timeout (10-7200) |
 | Voice session reuse timeout (seconds)    | 900                 | Idle timeout before a remembered voice session expires                                 |
 | Include device/satellite context         | Yes                 | Append voice-origin device/area/satellite metadata to the prompt                       |
+| Speak only the final answer               | No                  | Drop text before tool-progress events; wait for the complete reply before speaking or displaying it |
 | Always speak replies through fallback    | No                  | Also send voice replies through a fallback `tts.speak` target for device-origin turns  |
 | Fallback media player entity_id          | (empty)             | Media player target for fallback speech                                                |
 | Fallback TTS entity_id                   | (empty)             | TTS entity used for fallback speech                                                    |
@@ -102,6 +103,22 @@ The value is not a filesystem path: do not enter a directory, `/profile/worker`,
 If your installed integration version does not show the **Profile** field yet, the immediate workaround is to make the desired profile primary in the add-on, then leave the integration's profile blank. After updating to a version with profile routing, select each profile through its own integration entry and assign that entry to the desired Home Assistant Assist agent.
 
 The default system prompt includes the current date/time, timezone, the user's name, the home name, and exposed entity names, aliases, domains, areas, and states (if enabled). Entity exposure is off by default since Hermes Agent can access Home Assistant entities directly when a Home Assistant token is configured in the Hermes Agent add-on.
+
+### Final-answer-only speech
+
+Enable **Speak only the final answer (drop pre-tool text)** to hide and skip spoken
+announcements such as "I will check that" before Hermes calls a tool. The integration
+buffers the reply, clears held text on each `hermes.tool.progress` event, and emits
+only the text after the last such event when the stream completes successfully.
+This also delays replies without tool calls: incremental speech and Assist text
+updates are lost while this option is on. Failed or interrupted buffered replies
+are discarded rather than speaking text that might still be a preamble. The
+default is off, preserving incremental streaming.
+
+This requires Hermes to send its `hermes.tool.progress` SSE events. In Hermes
+v0.23.3, `platforms.api_server.tool_progress_events` defaults to `true`; leave it
+enabled. If the server or a proxy suppresses these events, the integration cannot
+identify pre-tool text and will emit the whole buffered reply.
 
 ### Intentional silence
 

@@ -395,8 +395,10 @@ class HermesApiClient:
         self,
         messages: list[dict[str, str]],
         session_id: str | None = None,
+        *,
+        final_answer_only: bool = False,
     ) -> AsyncGenerator[str, None]:
-        """Send a streaming chat completion request. Yields content deltas."""
+        """Yield deltas, or buffer the last tool-delimited segment until success."""
         await self._async_verify_native_profile_route()
         payload = {
             "model": self._model,
@@ -426,6 +428,7 @@ class HermesApiClient:
                 buffer = ""
                 event_name = "message"
                 terminal_failed = False
+                held_content: list[str] = []
                 try:
                     async for chunk in resp.content.iter_any():
                         buffer += chunk.decode("utf-8", errors="replace")
@@ -448,12 +451,16 @@ class HermesApiClient:
                                         "Hermes API reported an incomplete chat response",
                                         error_category=ERROR_CATEGORY_SERVER,
                                     )
+                                if final_answer_only and held_content:
+                                    yield "".join(held_content)
                                 return
                             if not line.startswith("data: "):
                                 continue
                             if event_name == "error":
                                 terminal_failed = True
                                 continue
+                            if final_answer_only and event_name == "hermes.tool.progress":
+                                held_content.clear()
                             if event_name != "message" or terminal_failed:
                                 continue
 
@@ -468,7 +475,10 @@ class HermesApiClient:
                                     .get("content")
                                 )
                                 if isinstance(delta, str) and delta:
-                                    yield delta
+                                    if final_answer_only:
+                                        held_content.append(delta)
+                                    else:
+                                        yield delta
                             except (json.JSONDecodeError, IndexError):
                                 continue
                 except (aiohttp.ClientError, asyncio.TimeoutError) as err:
